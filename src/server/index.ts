@@ -402,7 +402,7 @@ io.on('connection', (socket) => {
       state.phase = 'countdown';
       state.countdownEndsAt = Date.now() + 5000;
       state.message = 'Round starts in 5...';
-      resetRoundState();
+      resetRoundState(true);
       emitSnapshot();
       emitLobbyList();
     });
@@ -1705,12 +1705,12 @@ function resetFlagsAndKings() {
   state.score = { red: 0, blue: 0 };
 }
 
-function resetRoundState() {
+function resetRoundState(assignForRound = state.phase === 'running') {
   state.projectiles.clear();
   resetFlagsAndKings();
   state.roundResult = null;
   promoteObservers();
-  if (state.phase === 'running') {
+  if (assignForRound) {
     assignTeamsForRound();
   }
   const teamSlots: Record<ActiveTeam, number> = { red: 0, blue: 0, none: 0 };
@@ -1724,7 +1724,7 @@ function resetRoundState() {
     player.shieldUntil = 0;
     player.respawnAt = 0;
     player.shootCooldown = 0;
-    const team = (state.phase === 'running' ? player.team : 'none') as ActiveTeam;
+    const team = (assignForRound ? player.team : 'none') as ActiveTeam;
     player.team = team;
     const spawn = findSpawnPosition(team, PLAYER_RADIUS, teamSlots[team]);
     teamSlots[team] += 1;
@@ -1732,7 +1732,7 @@ function resetRoundState() {
     player.y = spawn.y;
   }
 
-  if (state.phase === 'running' && state.mode === 'protect-the-king') {
+  if (assignForRound && state.mode === 'protect-the-king') {
     assignKingsForProtectMode();
   }
 }
