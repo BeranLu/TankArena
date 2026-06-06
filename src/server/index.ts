@@ -603,7 +603,7 @@ function updateBotInput(bot: PlayerState) {
   }
 
   const movementTarget = getBotMovementTarget(bot);
-  const combatTarget = pickBotTarget(bot);
+  const combatTarget = pickBotCombatTarget(bot);
   if (!movementTarget && !combatTarget) {
     bot.input = { ...bot.input, up: false, down: false, left: false, right: false, fire: false, aimX: bot.x + Math.cos(bot.bodyAngle) * 120, aimY: bot.y + Math.sin(bot.bodyAngle) * 120 };
     return;
@@ -720,6 +720,10 @@ function getTeammateAvoidanceTurn(bot: PlayerState) {
 }
 
 function getBotMovementTarget(bot: PlayerState): BotMovementTarget | undefined {
+  if (state.phase === 'running' && state.mode === 'protect-the-king' && (bot.team === 'red' || bot.team === 'blue')) {
+    return getProtectKingBotMovementTarget(bot);
+  }
+
   if (state.phase !== 'running' || state.mode !== 'capture-the-flag' || (bot.team !== 'red' && bot.team !== 'blue')) {
     const combatTarget = pickBotTarget(bot);
     if (!combatTarget) {
@@ -773,6 +777,66 @@ function getBotMovementTarget(bot: PlayerState): BotMovementTarget | undefined {
 
   const capturePoint = getAttackerCapturePoint(bot, enemyFlag);
   return { x: capturePoint.x, y: capturePoint.y, preferredDistance: 14 };
+}
+
+function getProtectKingBotMovementTarget(bot: PlayerState): BotMovementTarget | undefined {
+  const team = bot.team as Exclude<TeamId, 'observer' | 'none'>;
+  const enemyTeam: Exclude<TeamId, 'observer' | 'none'> = team === 'red' ? 'blue' : 'red';
+  const ownKing = getTeamKing(team);
+  const enemyKing = getTeamKing(enemyTeam);
+  const defender = isDefenderBot(bot);
+
+  if (bot.isKing) {
+    const kingAnchor = team === 'red' ? state.map.redKing : state.map.blueKing;
+    const phase = Date.now() / 1000;
+    const radius = 46;
+    return {
+      x: clamp(kingAnchor.x + Math.cos(phase) * radius, PLAYER_RADIUS, state.map.width - PLAYER_RADIUS),
+      y: clamp(kingAnchor.y + Math.sin(phase * 0.8) * radius, PLAYER_RADIUS, state.map.height - PLAYER_RADIUS),
+      preferredDistance: 18,
+    };
+  }
+
+  if (defender && ownKing && ownKing.health > 0) {
+    const intruder = findNearestEnemyNearPoint(bot, { x: ownKing.x, y: ownKing.y }, 320);
+    if (intruder) {
+      return { x: intruder.x, y: intruder.y, preferredDistance: 82 };
+    }
+    const escortPoint = getEscortPointAroundKing(bot, ownKing);
+    return { x: escortPoint.x, y: escortPoint.y, preferredDistance: 14 };
+  }
+
+  if (enemyKing && enemyKing.health > 0) {
+    return { x: enemyKing.x, y: enemyKing.y, preferredDistance: 72 };
+  }
+
+  const fallbackCombat = pickBotTarget(bot);
+  if (!fallbackCombat) {
+    return undefined;
+  }
+  return { x: fallbackCombat.x, y: fallbackCombat.y, preferredDistance: 120 };
+}
+
+function getEscortPointAroundKing(bot: PlayerState, king: PlayerState) {
+  const idNumber = Number.parseInt(bot.id.replace('bot-', ''), 10);
+  const slot = Number.isFinite(idNumber) ? idNumber : 0;
+  const angle = ((slot % 6) / 6) * Math.PI * 2 + Date.now() / 3000;
+  const radius = 56;
+  return {
+    x: clamp(king.x + Math.cos(angle) * radius, PLAYER_RADIUS, state.map.width - PLAYER_RADIUS),
+    y: clamp(king.y + Math.sin(angle) * radius, PLAYER_RADIUS, state.map.height - PLAYER_RADIUS),
+  };
+}
+
+function pickBotCombatTarget(bot: PlayerState) {
+  if (state.phase === 'running' && state.mode === 'protect-the-king' && (bot.team === 'red' || bot.team === 'blue')) {
+    const enemyTeam: Exclude<TeamId, 'observer' | 'none'> = bot.team === 'red' ? 'blue' : 'red';
+    const enemyKing = getTeamKing(enemyTeam);
+    if (enemyKing && enemyKing.health > 0) {
+      return enemyKing;
+    }
+  }
+  return pickBotTarget(bot);
 }
 
 function getAttackerCapturePoint(bot: PlayerState, enemyFlag: FlagState) {
@@ -1302,6 +1366,10 @@ function pickRandomPlayer(players: PlayerState[]) {
 function getTeamKingHealth(team: Exclude<TeamId, 'observer' | 'none'>) {
   const king = Array.from(state.players.values()).find((player) => !player.observer && player.team === team && player.isKing);
   return king ? Math.max(0, king.health) : 0;
+}
+
+function getTeamKing(team: Exclude<TeamId, 'observer' | 'none'>) {
+  return Array.from(state.players.values()).find((player) => !player.observer && player.team === team && player.isKing && player.health > 0);
 }
 
 setInterval(gameLoop, TICK_MS);
