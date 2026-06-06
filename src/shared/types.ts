@@ -103,15 +103,16 @@ export interface LobbySummary {
   mapName: string;
   players: number;
   bots: number;
+  requiresPassword: boolean;
 }
 
 export interface ClientToServerEvents {
   listLobbies: () => void;
-  createLobby: (payload: { name: string; playerName: string }) => void;
-  joinLobby: (payload: { lobbyId: string; name: string }) => void;
+  createLobby: (payload: { name: string; playerName: string; password?: string; clientKey?: string }) => void;
+  joinLobby: (payload: { lobbyId: string; name: string; password?: string; clientKey?: string }) => void;
   leaveLobby: () => void;
-  claimAdmin: (payload?: { password?: string }) => void;
   transferAdmin: (payload: { playerId: string }) => void;
+  kickPlayer: (payload: { playerId: string }) => void;
   addBot: () => void;
   removeBot: () => void;
   setReady: (ready: boolean) => void;

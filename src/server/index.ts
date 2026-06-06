@@ -23,9 +23,20 @@ import type {
 type PlayerState = PlayerSnapshot & {
   input: PlayerInput;
   socketId: string | null;
+  clientKey: string;
+  joinedAt: number;
   respawnAt: number;
   shootCooldown: number;
   shieldUntil: number;
+};
+
+type RecoverablePlayer = {
+  name: string;
+  team: TeamId;
+  score: number;
+  ready: boolean;
+  observer: boolean;
+  expiresAt: number;
 };
 
 type ProjectileState = ProjectileSnapshot & {
@@ -40,10 +51,12 @@ type BotMovementTarget = Point & { preferredDistance: number };
 type LobbyState = {
   id: string;
   name: string;
+  password: string | null;
   phase: MatchPhase;
   mode: GameMode;
   map: ArenaMap;
   players: Map<string, PlayerState>;
+  reconnectCache: Map<string, RecoverablePlayer>;
   projectiles: Map<string, ProjectileState>;
   redFlag: FlagState;
   blueFlag: FlagState;
@@ -59,6 +72,7 @@ type LobbyRuntime = {
   name: string;
   state: LobbyState;
   loop: NodeJS.Timeout;
+  emptyTimer: NodeJS.Timeout | null;
 };
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -76,12 +90,13 @@ const RESPAWN_SHIELD_MS = 5000;
 const DEFAULT_CTF_WIN_SCORE = 3;
 const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
 const DEFAULT_KING_HEALTH = 500;
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? '').trim();
 const BOT_NAME_PREFIX = 'BOT';
 const MAX_LOBBIES = parseLimit(process.env.MAX_LOBBIES, 8);
 const MAX_PLAYERS_PER_LOBBY = parseLimit(process.env.MAX_PLAYERS_PER_LOBBY, 10);
 const MAX_BOTS_PER_LOBBY = parseLimit(process.env.MAX_BOTS_PER_LOBBY, 6);
 const MAX_TOTAL_PLAYERS = parseLimit(process.env.MAX_TOTAL_PLAYERS, 40);
+const EMPTY_LOBBY_GRACE_MS = parseLimit(process.env.EMPTY_LOBBY_GRACE_MS, 45000);
+const RECONNECT_GRACE_MS = parseLimit(process.env.RECONNECT_GRACE_MS, 25000);
 const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
@@ -150,9 +165,9 @@ if (fs.existsSync(clientDir)) {
 const lobbyRuntimes = new Map<string, LobbyRuntime>();
 const socketLobbyMap = new Map<string, string>();
 let lobbyCounter = 1;
-let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby');
+let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null);
 
-createLobbyRuntime(DEFAULT_LOBBY_ID, 'Main Lobby');
+createLobbyRuntime(DEFAULT_LOBBY_ID, 'Main Lobby', null);
 
 io.on('connection', (socket) => {
   socket.emit('lobbyList', buildLobbyList());
@@ -161,18 +176,19 @@ io.on('connection', (socket) => {
     socket.emit('lobbyList', buildLobbyList());
   });
 
-  socket.on('createLobby', ({ name, playerName }: { name: string; playerName: string }) => {
+  socket.on('createLobby', ({ name, playerName, password, clientKey }: { name: string; playerName: string; password?: string; clientKey?: string }) => {
     if (lobbyRuntimes.size >= MAX_LOBBIES) {
       socket.emit('message', `Lobby limit reached (${MAX_LOBBIES}).`);
       return;
     }
-    const runtime = createLobbyRuntime(nextLobbyId(), sanitizeLobbyName(name));
-    joinSocketToLobby(socket, runtime, playerName, true);
+    const sanitizedPassword = sanitizeLobbyPassword(password);
+    const runtime = createLobbyRuntime(nextLobbyId(), sanitizeLobbyName(name), sanitizedPassword);
+    joinSocketToLobby(socket, runtime, playerName, { forceAdmin: true, clientKey });
     socket.emit('message', `Lobby ${runtime.name} created. You are the admin.`);
     emitLobbyList();
   });
 
-  socket.on('joinLobby', ({ lobbyId, name }: { lobbyId: string; name: string }) => {
+  socket.on('joinLobby', ({ lobbyId, name, password, clientKey }: { lobbyId: string; name: string; password?: string; clientKey?: string }) => {
     const runtime = lobbyRuntimes.get(lobbyId);
     if (!runtime) {
       socket.emit('message', 'That lobby no longer exists.');
@@ -186,6 +202,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (runtime.state.password && runtime.state.password !== sanitizeLobbyPassword(password)) {
+      socket.emit('message', 'Lobby password is incorrect.');
+      return;
+    }
+
     if (countLobbyHumans(runtime) >= MAX_PLAYERS_PER_LOBBY) {
       socket.emit('message', `Lobby is full (${MAX_PLAYERS_PER_LOBBY} players max).`);
       return;
@@ -196,36 +217,16 @@ io.on('connection', (socket) => {
       return;
     }
 
-    joinSocketToLobby(socket, runtime, name, false);
+    joinSocketToLobby(socket, runtime, name, { forceAdmin: false, clientKey });
 
     emitLobbyList();
   });
 
   socket.on('leaveLobby', () => {
-    if (leaveLobby(socket.id, '')) {
+    if (leaveLobby(socket.id, '', false)) {
       socket.emit('message', 'Left lobby.');
       socket.emit('lobbyList', buildLobbyList());
     }
-  });
-
-  socket.on('claimAdmin', (payload?: { password?: string }) => {
-    const runtime = getSocketLobby(socket.id);
-    if (!runtime) {
-      return;
-    }
-    if (ADMIN_PASSWORD.length > 0) {
-      const provided = (payload?.password ?? '').trim();
-      if (provided !== ADMIN_PASSWORD) {
-        socket.emit('message', 'Admin password is incorrect.');
-        return;
-      }
-    }
-    runInLobby(runtime, () => {
-      state.adminId = socket.id;
-      refreshAdminFlags();
-      broadcast('Admin console claimed.');
-      emitSnapshot();
-    });
   });
 
   socket.on('transferAdmin', ({ playerId }: { playerId: string }) => {
@@ -247,6 +248,31 @@ io.on('connection', (socket) => {
       broadcast(`Admin transferred to ${target.name}.`);
       emitSnapshot();
     });
+  });
+
+  socket.on('kickPlayer', ({ playerId }: { playerId: string }) => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
+      return;
+    }
+
+    let targetName = '';
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id)) {
+        return;
+      }
+      const target = state.players.get(playerId);
+      if (!target || target.isBot || target.id === socket.id) {
+        return;
+      }
+      targetName = target.name;
+    });
+
+    if (!targetName) {
+      return;
+    }
+    io.to(playerId).emit('message', 'You were removed from the lobby by admin.');
+    leaveLobby(playerId, `${targetName} was removed by admin.`, false);
   });
 
   socket.on('addBot', () => {
@@ -424,7 +450,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    leaveLobby(socket.id, '');
+    leaveLobby(socket.id, '', true);
   });
 });
 
@@ -450,14 +476,16 @@ function lobbyRoom(lobbyId: string) {
   return `lobby:${lobbyId}`;
 }
 
-function createLobbyState(id: string, name: string): LobbyState {
+function createLobbyState(id: string, name: string, password: string | null): LobbyState {
   return {
     id,
     name,
+    password,
     phase: 'lobby',
     mode: 'deathmatch',
     map: MAPS['cargo-yard'],
     players: new Map<string, PlayerState>(),
+    reconnectCache: new Map<string, RecoverablePlayer>(),
     projectiles: new Map<string, ProjectileState>(),
     redFlag: { x: MAPS['cargo-yard'].redFlag.x, y: MAPS['cargo-yard'].redFlag.y, homeX: MAPS['cargo-yard'].redFlag.x, homeY: MAPS['cargo-yard'].redFlag.y, carriedBy: null },
     blueFlag: { x: MAPS['cargo-yard'].blueFlag.x, y: MAPS['cargo-yard'].blueFlag.y, homeX: MAPS['cargo-yard'].blueFlag.x, homeY: MAPS['cargo-yard'].blueFlag.y, carriedBy: null },
@@ -474,11 +502,12 @@ function createLobbyState(id: string, name: string): LobbyState {
   };
 }
 
-function createLobbyRuntime(id: string, name: string) {
+function createLobbyRuntime(id: string, name: string, password: string | null) {
   const runtime: LobbyRuntime = {
     id,
     name,
-    state: createLobbyState(id, name),
+    state: createLobbyState(id, name, password),
+    emptyTimer: null,
     loop: setInterval(() => {
       runInLobby(runtime, () => {
         gameLoop();
@@ -526,6 +555,7 @@ function buildLobbyList(): LobbySummary[] {
     mapName: runtime.state.map.name,
     players: countLobbyHumans(runtime),
     bots: Array.from(runtime.state.players.values()).filter((player) => player.isBot).length,
+    requiresPassword: Boolean(runtime.state.password),
   }));
 }
 
@@ -533,20 +563,32 @@ function emitLobbyList() {
   io.emit('lobbyList', buildLobbyList());
 }
 
-function joinSocketToLobby(socket: Socket<ClientToServerEvents, ServerToClientEvents>, runtime: LobbyRuntime, name: string, forceAdmin: boolean) {
-  leaveLobby(socket.id, '');
+function joinSocketToLobby(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  runtime: LobbyRuntime,
+  name: string,
+  options: { forceAdmin: boolean; clientKey?: string },
+) {
+  leaveLobby(socket.id, '', false);
+  clearEmptyLobbyTimer(runtime);
   socket.join(lobbyRoom(runtime.id));
   socketLobbyMap.set(socket.id, runtime.id);
 
   runInLobby(runtime, () => {
+    const key = sanitizeClientKey(options.clientKey);
+    const recovered = key ? takeRecoverablePlayer(key) : null;
     const observer = state.phase !== 'lobby';
-    const team: TeamId = observer ? 'observer' : 'none';
-    const spawnSlot = observer ? 0 : teamPlayerCount('none');
-    const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
+    const recoveredTeam: TeamId = recovered?.observer ? 'observer' : (recovered?.team ?? 'none');
+    const team: TeamId = observer ? (recovered ? recoveredTeam : 'observer') : (recovered ? recoveredTeam : 'none');
+    const spawnSlot = observer || team === 'observer' ? 0 : teamPlayerCount(team as ActiveTeam);
+    const spawnTeam = observer || team === 'observer' ? 'none' : (team as ActiveTeam);
+    const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition(spawnTeam, PLAYER_RADIUS, spawnSlot);
     const player: PlayerState = {
       id: socket.id,
       socketId: socket.id,
-      name: sanitizeName(name),
+      clientKey: key,
+      joinedAt: Date.now(),
+      name: sanitizeName(recovered?.name ?? name),
       isBot: false,
       team,
       x: spawn.x,
@@ -555,9 +597,9 @@ function joinSocketToLobby(socket: Socket<ClientToServerEvents, ServerToClientEv
       turretAngle: 0,
       health: BASE_HEALTH,
       maxHealth: BASE_HEALTH,
-      score: 0,
-      ready: false,
-      observer,
+      score: recovered?.score ?? 0,
+      ready: recovered?.ready ?? false,
+      observer: observer ? true : (recovered?.observer ?? false),
       admin: false,
       carryingFlag: false,
       isKing: false,
@@ -568,8 +610,14 @@ function joinSocketToLobby(socket: Socket<ClientToServerEvents, ServerToClientEv
       shieldUntil: 0,
     };
 
+    if (recovered && !observer) {
+      player.team = recovered.team;
+      player.score = recovered.score;
+      player.ready = recovered.ready;
+    }
+
     state.players.set(socket.id, player);
-    if (forceAdmin || !state.adminId) {
+    if (options.forceAdmin || !state.adminId) {
       state.adminId = socket.id;
     }
     refreshAdminFlags();
@@ -580,7 +628,7 @@ function joinSocketToLobby(socket: Socket<ClientToServerEvents, ServerToClientEv
   });
 }
 
-function leaveLobby(socketId: string, reason: string) {
+function leaveLobby(socketId: string, reason: string, preserveForReconnect: boolean) {
   const runtime = getSocketLobby(socketId);
   if (!runtime) {
     return false;
@@ -593,14 +641,21 @@ function leaveLobby(socketId: string, reason: string) {
     if (!player) {
       return;
     }
+    if (preserveForReconnect && player.clientKey && !player.isBot) {
+      state.reconnectCache.set(player.clientKey, {
+        name: player.name,
+        team: player.team,
+        score: player.score,
+        ready: player.ready,
+        observer: player.observer,
+        expiresAt: Date.now() + RECONNECT_GRACE_MS,
+      });
+    }
     const wasAdmin = state.adminId === socketId;
     state.players.delete(socketId);
     if (wasAdmin) {
-      state.adminId = null;
-      const next = Array.from(state.players.values()).find((candidate) => !candidate.isBot);
-      if (next) {
-        state.adminId = next.id;
-      }
+      const next = pickNextAdmin();
+      state.adminId = next?.id ?? null;
       refreshAdminFlags();
     }
     state.message = reason || `${player.name} left the lobby.`;
@@ -608,8 +663,84 @@ function leaveLobby(socketId: string, reason: string) {
     emitSnapshot();
   });
 
+  scheduleLobbyCleanupIfEmpty(runtime);
   emitLobbyList();
   return true;
+}
+
+function pickNextAdmin() {
+  return Array.from(state.players.values())
+    .filter((candidate) => !candidate.isBot)
+    .sort((left, right) => left.joinedAt - right.joinedAt || left.id.localeCompare(right.id))[0];
+}
+
+function sanitizeLobbyPassword(password?: string) {
+  const trimmed = (password ?? '').trim().slice(0, 48);
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function sanitizeClientKey(clientKey?: string) {
+  const trimmed = (clientKey ?? '').trim().slice(0, 80);
+  return trimmed.length > 0 ? trimmed : '';
+}
+
+function takeRecoverablePlayer(clientKey: string) {
+  pruneReconnectCache();
+  const cached = state.reconnectCache.get(clientKey);
+  if (!cached) {
+    return null;
+  }
+  state.reconnectCache.delete(clientKey);
+  return cached;
+}
+
+function pruneReconnectCache() {
+  const now = Date.now();
+  for (const [key, cached] of state.reconnectCache.entries()) {
+    if (cached.expiresAt <= now) {
+      state.reconnectCache.delete(key);
+    }
+  }
+}
+
+function clearEmptyLobbyTimer(runtime: LobbyRuntime) {
+  if (!runtime.emptyTimer) {
+    return;
+  }
+  clearTimeout(runtime.emptyTimer);
+  runtime.emptyTimer = null;
+}
+
+function scheduleLobbyCleanupIfEmpty(runtime: LobbyRuntime) {
+  if (runtime.id === DEFAULT_LOBBY_ID) {
+    return;
+  }
+  const humans = countLobbyHumans(runtime);
+  if (humans > 0) {
+    clearEmptyLobbyTimer(runtime);
+    return;
+  }
+  if (runtime.emptyTimer) {
+    return;
+  }
+  runtime.emptyTimer = setTimeout(() => {
+    const activeRuntime = lobbyRuntimes.get(runtime.id);
+    if (!activeRuntime) {
+      return;
+    }
+    if (countLobbyHumans(activeRuntime) > 0) {
+      clearEmptyLobbyTimer(activeRuntime);
+      return;
+    }
+    destroyLobby(activeRuntime);
+  }, EMPTY_LOBBY_GRACE_MS);
+}
+
+function destroyLobby(runtime: LobbyRuntime) {
+  clearEmptyLobbyTimer(runtime);
+  clearInterval(runtime.loop);
+  lobbyRuntimes.delete(runtime.id);
+  emitLobbyList();
 }
 
 function formatMode(mode: GameMode) {
@@ -640,6 +771,8 @@ function createBot() {
   const player: PlayerState = {
     id,
     socketId: null,
+    clientKey: `bot:${id}`,
+    joinedAt: Date.now(),
     name,
     isBot: true,
     team: 'none',

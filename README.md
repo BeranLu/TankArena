@@ -25,7 +25,7 @@ The project can run on the public internet with HTTPS and WebSocket support.
 
 ### Option 1: Docker + Nginx (recommended)
 
-1. Copy `.env.example` to `.env` and set `ADMIN_PASSWORD`.
+1. Copy `.env.example` to `.env`.
 2. Provide TLS cert files at:
 	- `certs/fullchain.pem`
 	- `certs/privkey.pem`
@@ -41,7 +41,7 @@ The Nginx config is in `deploy/nginx/nginx.conf` and proxies both HTTP and WebSo
 1. Install dependencies and build:
 	- `npm install`
 	- `npm run build`
-2. Set env vars (`PORT`, `ADMIN_PASSWORD`).
+2. Set env vars (`PORT`, optional `EMPTY_LOBBY_GRACE_MS`, optional `RECONNECT_GRACE_MS`).
 3. Run with PM2:
 	- `npx pm2 start ecosystem.config.cjs`
 4. Put Nginx/Caddy in front for HTTPS.
@@ -53,7 +53,7 @@ Render can deploy directly from this repository using `render.yaml`.
 1. Push latest code to GitHub.
 2. In Render, click `New +` -> `Blueprint`.
 3. Connect your GitHub repo and select this project.
-4. In the generated service, set `ADMIN_PASSWORD` to a strong value.
+4. Optionally set `EMPTY_LOBBY_GRACE_MS` and `RECONNECT_GRACE_MS` in environment variables.
 5. Deploy.
 
 Render provides HTTPS automatically and assigns a public URL.
@@ -88,7 +88,7 @@ This path gives you an always-on Linux VM with full control and no sleep mode.
 	- `cd TankArena`
 6. Configure application environment:
 	- `cp .env.example .env`
-	- Edit `.env` and set a strong `ADMIN_PASSWORD`.
+	- Edit `.env` and tune `EMPTY_LOBBY_GRACE_MS` and `RECONNECT_GRACE_MS` if needed.
 7. Configure TLS certificates (required by current Nginx config):
 	- Put certificate chain at `certs/fullchain.pem`.
 	- Put private key at `certs/privkey.pem`.
@@ -103,7 +103,18 @@ After DNS points to the VM IP and certificates are valid, players can join over 
 
 ## Notes
 
-- If `ADMIN_PASSWORD` is set, claiming admin requires that password in the Admin Console.
+- Lobby creator becomes admin automatically. Admin can transfer ownership or kick players from the Admin Console.
+- Lobbies can be created as public or password-protected.
+- Empty non-main lobbies are auto-removed after `EMPTY_LOBBY_GRACE_MS`.
+- Recent disconnects can rejoin with preserved identity within `RECONNECT_GRACE_MS`.
 - Set `VITE_SUPPORT_URL` (for example your Buy Me a Coffee page) to show a "Support the project" section in the lobby preparation screen.
 - Late joiners are added as observers while a match is running.
 - The current implementation is a playable foundation. Capture the flag and protect the king are wired as supported game modes and can be expanded next.
+
+## License
+
+This project is available for non-commercial use.
+
+Commercial use requires prior written approval from the copyright holder.
+
+See `LICENSE` for full terms.

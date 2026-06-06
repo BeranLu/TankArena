@@ -33,6 +33,17 @@ const DEFAULT_MODE_SETTINGS: ModeSettings = {
 
 const SUPPORT_URL = (((import.meta as { env?: { VITE_SUPPORT_URL?: string } }).env?.VITE_SUPPORT_URL)?.trim() ?? '');
 
+function getOrCreateClientKey() {
+  const storageKey = 'tankarena-client-key';
+  const existing = window.localStorage.getItem(storageKey)?.trim();
+  if (existing) {
+    return existing;
+  }
+  const next = `client-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  window.localStorage.setItem(storageKey, next);
+  return next;
+}
+
 export default function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
@@ -40,17 +51,20 @@ export default function App() {
   const [joined, setJoined] = useState(false);
   const [lobbies, setLobbies] = useState<LobbySummary[]>([]);
   const [selectedLobbyId, setSelectedLobbyId] = useState('');
+  const [selectedLobbyPassword, setSelectedLobbyPassword] = useState('');
   const [newLobbyName, setNewLobbyName] = useState('');
+  const [newLobbyPassword, setNewLobbyPassword] = useState('');
   const [currentLobby, setCurrentLobby] = useState<{ id: string; name: string } | null>(null);
   const [observer, setObserver] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [adminMode, setAdminMode] = useState<GameMode>('deathmatch');
   const [adminMap, setAdminMap] = useState('cargo-yard');
-  const [adminPassword, setAdminPassword] = useState('');
   const [adminTargetPlayerId, setAdminTargetPlayerId] = useState('');
+  const [kickTargetPlayerId, setKickTargetPlayerId] = useState('');
   const [adminSettings, setAdminSettings] = useState<ModeSettings>(DEFAULT_MODE_SETTINGS);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const clientKeyRef = useRef(getOrCreateClientKey());
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -61,9 +75,7 @@ export default function App() {
 
     nextSocket.on('snapshot', (nextSnapshot) => {
       setSnapshot(nextSnapshot);
-      if (nextSnapshot.adminId === nextSocket.id) {
-        setIsAdmin(true);
-      }
+      setIsAdmin(nextSnapshot.adminId === nextSocket.id);
     });
     nextSocket.on('lobbyList', (nextLobbies: LobbySummary[]) => {
       setLobbies(nextLobbies);
@@ -187,6 +199,12 @@ export default function App() {
     }
     return snapshot.players.filter((player) => !player.isBot && player.id !== snapshot.adminId);
   }, [snapshot]);
+  const kickablePlayers = useMemo(() => {
+    if (!snapshot || !socket) {
+      return [];
+    }
+    return snapshot.players.filter((player) => !player.isBot && player.id !== socket.id);
+  }, [snapshot, socket]);
 
   useEffect(() => {
     if (transferablePlayers.length === 0) {
@@ -201,15 +219,29 @@ export default function App() {
     });
   }, [transferablePlayers]);
 
+  useEffect(() => {
+    if (kickablePlayers.length === 0) {
+      setKickTargetPlayerId('');
+      return;
+    }
+    setKickTargetPlayerId((current) => {
+      if (current && kickablePlayers.some((player) => player.id === current)) {
+        return current;
+      }
+      return kickablePlayers[0].id;
+    });
+  }, [kickablePlayers]);
+
   const join = () => {
     if (!selectedLobbyId) {
       return;
     }
-    socket?.emit('joinLobby', { lobbyId: selectedLobbyId, name });
+    socket?.emit('joinLobby', { lobbyId: selectedLobbyId, name, password: selectedLobbyPassword, clientKey: clientKeyRef.current });
   };
   const createLobby = () => {
-    socket?.emit('createLobby', { name: newLobbyName, playerName: name });
+    socket?.emit('createLobby', { name: newLobbyName, playerName: name, password: newLobbyPassword, clientKey: clientKeyRef.current });
     setNewLobbyName('');
+    setNewLobbyPassword('');
   };
   const leaveLobby = () => {
     socket?.emit('leaveLobby');
@@ -220,7 +252,6 @@ export default function App() {
     setSnapshot(null);
     socket?.emit('listLobbies');
   };
-  const claimAdmin = () => socket?.emit('claimAdmin', { password: adminPassword });
   const ready = (value: boolean) => socket?.emit('setReady', value);
   const startMatch = () => socket?.emit('startMatch');
   const togglePause = () => socket?.emit('togglePause');
@@ -272,7 +303,7 @@ export default function App() {
 
       {announcement ? <div className="announcement">{announcement}</div> : null}
 
-      <section className="panel lobbyBrowserPanel">
+      {!joined ? <section className="panel lobbyBrowserPanel">
         <div className="panelHeader compact">
           <h2>Lobby Selection</h2>
           <button type="button" onClick={() => socket?.emit('listLobbies')}>Refresh list</button>
@@ -288,21 +319,28 @@ export default function App() {
               {lobbies.length === 0 ? <option value="">No lobbies available</option> : null}
               {lobbies.map((lobby) => (
                 <option key={lobby.id} value={lobby.id}>
-                  {lobby.name} · {lobby.players} players · {lobby.bots} bots · {MODES[lobby.mode]}
+                  {lobby.requiresPassword ? 'Private' : 'Public'} · {lobby.name} · {lobby.players} players · {lobby.bots} bots · {MODES[lobby.mode]}
                 </option>
               ))}
             </select>
           </label>
+          <label className="field">
+            <span>Lobby password (if required)</span>
+            <input type="password" value={selectedLobbyPassword} onChange={(event) => setSelectedLobbyPassword(event.target.value)} maxLength={48} />
+          </label>
           <div className="controlsRow wrap">
             <button type="button" onClick={join} disabled={!selectedLobbyId}>Join selected lobby</button>
-            <button type="button" onClick={leaveLobby} disabled={!joined}>Leave current lobby</button>
           </div>
           <label className="field">
             <span>Create lobby</span>
             <input value={newLobbyName} onChange={(event) => setNewLobbyName(event.target.value)} maxLength={28} placeholder="New lobby name" />
           </label>
+          <label className="field">
+            <span>Create lobby password (optional)</span>
+            <input type="password" value={newLobbyPassword} onChange={(event) => setNewLobbyPassword(event.target.value)} maxLength={48} placeholder="Leave empty for public lobby" />
+          </label>
           <button type="button" onClick={createLobby} disabled={!newLobbyName.trim()}>Create lobby</button>
-          {!joined && SUPPORT_URL ? (
+          {SUPPORT_URL ? (
             <div className="supportBox">
               <p className="supportTitle">Support the project</p>
               <p className="supportText">If you enjoy Tank Arena, you can support development on Buy Me a Coffee.</p>
@@ -312,7 +350,7 @@ export default function App() {
             </div>
           ) : null}
         </div>
-      </section>
+      </section> : null}
 
       {joined ? <main className="layout">
         <section className="panel gamePanel">
@@ -386,25 +424,24 @@ export default function App() {
             </ul>
           </section>
 
-          <section className="panel adminPanel">
+          {isAdmin ? <section className="panel adminPanel">
             <div className="panelHeader compact">
               <h2>Admin Console</h2>
-              <button type="button" onClick={claimAdmin}>Claim admin</button>
             </div>
-            <label className="field">
-              <span>Admin password</span>
-              <input
-                type="password"
-                value={adminPassword}
-                onChange={(event) => setAdminPassword(event.target.value)}
-                placeholder="Required when ADMIN_PASSWORD is set"
-              />
-            </label>
             <label className="field">
               <span>Transfer admin to</span>
               <select value={adminTargetPlayerId} onChange={(event) => setAdminTargetPlayerId(event.target.value)}>
                 {transferablePlayers.length === 0 ? <option value="">No eligible players</option> : null}
                 {transferablePlayers.map((player) => (
+                  <option key={player.id} value={player.id}>{player.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Kick player</span>
+              <select value={kickTargetPlayerId} onChange={(event) => setKickTargetPlayerId(event.target.value)}>
+                {kickablePlayers.length === 0 ? <option value="">No players to kick</option> : null}
+                {kickablePlayers.map((player) => (
                   <option key={player.id} value={player.id}>{player.name}</option>
                 ))}
               </select>
@@ -476,18 +513,19 @@ export default function App() {
               />
             </label>
             <div className="controlsRow wrap">
-              <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isAdmin || !isLobby}>Apply mode</button>
-              <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isAdmin || !isLobby}>Apply map</button>
-              <button type="button" onClick={applyModeSettings} disabled={!isAdmin || !isLobby}>Apply settings</button>
-              <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!isAdmin || !adminTargetPlayerId}>Pass admin</button>
-              <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isAdmin || !isLobby}>+ Bot</button>
-              <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isAdmin || !isLobby}>- Bot</button>
-              <button type="button" onClick={startMatch} disabled={!isAdmin || !isLobby}>Start</button>
-              <button type="button" onClick={togglePause} disabled={!isAdmin || !canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
-              <button type="button" onClick={resetLobby} disabled={!isAdmin}>Stop to lobby</button>
+              <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isLobby}>Apply mode</button>
+              <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isLobby}>Apply map</button>
+              <button type="button" onClick={applyModeSettings} disabled={!isLobby}>Apply settings</button>
+              <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!adminTargetPlayerId}>Pass admin</button>
+              <button type="button" onClick={() => socket?.emit('kickPlayer', { playerId: kickTargetPlayerId })} disabled={!kickTargetPlayerId}>Kick player</button>
+              <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isLobby}>+ Bot</button>
+              <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isLobby}>- Bot</button>
+              <button type="button" onClick={startMatch} disabled={!isLobby}>Start</button>
+              <button type="button" onClick={togglePause} disabled={!canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
+              <button type="button" onClick={resetLobby}>Stop to lobby</button>
             </div>
             <p className="adminTip">To change map or game type during a match: click Stop to lobby, apply mode/map, then Start.</p>
-          </section>
+          </section> : null}
         </aside>
       </main> : null}
     </div>
