@@ -65,8 +65,28 @@ export default function App() {
   const [adminSettings, setAdminSettings] = useState<ModeSettings>(DEFAULT_MODE_SETTINGS);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const clientKeyRef = useRef(getOrCreateClientKey());
+  const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
+  const snapshotRef = useRef<GameSnapshot | null>(null);
+  const joinedRef = useRef(false);
+  const observerRef = useRef(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    socketRef.current = socket;
+  }, [socket]);
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    joinedRef.current = joined;
+  }, [joined]);
+
+  useEffect(() => {
+    observerRef.current = observer;
+  }, [observer]);
 
   useEffect(() => {
     const nextSocket = io();
@@ -122,7 +142,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || !joined || observer) {
+      if (event.repeat || !joinedRef.current || observerRef.current) {
         return;
       }
       if (event.code === 'KeyW' || event.code === 'ArrowUp') inputRef.current.up = true;
@@ -134,7 +154,7 @@ export default function App() {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
-      if (!joined || observer) {
+      if (!joinedRef.current || observerRef.current) {
         return;
       }
       if (event.code === 'KeyW' || event.code === 'ArrowUp') inputRef.current.up = false;
@@ -146,14 +166,15 @@ export default function App() {
     };
 
     const onMouseMove = (event: MouseEvent) => updateAim(event.clientX, event.clientY);
-    const onMouseDown = () => {
-      if (joined && !observer) {
+    const onMouseDown = (event: MouseEvent) => {
+      if (joinedRef.current && !observerRef.current) {
+        updateAim(event.clientX, event.clientY);
         inputRef.current.fire = true;
         pushInput();
       }
     };
     const onMouseUp = () => {
-      if (joined && !observer) {
+      if (joinedRef.current && !observerRef.current) {
         inputRef.current.fire = false;
         pushInput();
       }
@@ -172,7 +193,7 @@ export default function App() {
       window.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [joined, observer]);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -289,21 +310,21 @@ export default function App() {
     : 0;
 
   function pushInput() {
-    if (!socket || !joined || observer) {
+    if (!socketRef.current || !joinedRef.current || observerRef.current) {
       return;
     }
-    socket.emit('input', { ...inputRef.current });
+    socketRef.current.emit('input', { ...inputRef.current });
   }
 
   function updateAim(clientX: number, clientY: number) {
-    if (!socket || !canvasRef.current || !snapshot || !joined || observer) {
+    if (!socketRef.current || !canvasRef.current || !snapshotRef.current || !joinedRef.current || observerRef.current) {
       return;
     }
     const rect = canvasRef.current.getBoundingClientRect();
     const normalizedX = (clientX - rect.left) / rect.width;
     const normalizedY = (clientY - rect.top) / rect.height;
-    inputRef.current.aimX = normalizedX * snapshot.map.width;
-    inputRef.current.aimY = normalizedY * snapshot.map.height;
+    inputRef.current.aimX = normalizedX * snapshotRef.current.map.width;
+    inputRef.current.aimY = normalizedY * snapshotRef.current.map.height;
     pushInput();
   }
 
