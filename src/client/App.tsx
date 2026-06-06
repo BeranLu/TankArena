@@ -221,7 +221,7 @@ export default function App() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) {
+    if (!joined || !canvas) {
       return;
     }
     const context = canvas.getContext('2d');
@@ -257,7 +257,7 @@ export default function App() {
       window.removeEventListener('resize', resize);
       window.cancelAnimationFrame(frameId);
     };
-  }, []);
+  }, [joined]);
 
   const sortedPlayers = useMemo(() => {
     return [...(snapshot?.players ?? [])].sort((left, right) => right.score - left.score);
