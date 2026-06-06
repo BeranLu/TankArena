@@ -505,6 +505,9 @@ export default function App() {
               <select value={adminMap} onChange={(event) => setAdminMap(event.target.value)}>
                 <option value="cargo-yard">Cargo Yard</option>
                 <option value="iron-pass">Iron Pass</option>
+                <option value="dune-stronghold">Dune Stronghold</option>
+                <option value="frostline">Frostline</option>
+                <option value="reactor-ridge">Reactor Ridge</option>
               </select>
             </label>
             <label className="field">
