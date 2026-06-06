@@ -612,13 +612,39 @@ function updateBotInput(bot: PlayerState) {
   const hullDelta = wrapAngle(targetAngle - bot.bodyAngle);
   const turretDelta = wrapAngle(targetAngle - bot.turretAngle);
 
-  const up = distanceToTarget > 150;
+  const forwardProbeDistance = Math.max(28, Math.min(90, distanceToTarget * 0.35));
+  const frontBlocked = isBlockedAhead(bot, bot.bodyAngle, forwardProbeDistance);
+  const leftClearance = sampleClearance(bot, bot.bodyAngle - Math.PI / 3, 120);
+  const rightClearance = sampleClearance(bot, bot.bodyAngle + Math.PI / 3, 120);
+  const steerToRight = rightClearance > leftClearance;
+
+  const up = distanceToTarget > 150 && !frontBlocked;
   const down = distanceToTarget < 70;
-  const left = hullDelta < -0.1;
-  const right = hullDelta > 0.1;
+  const left = frontBlocked ? !steerToRight : hullDelta < -0.1;
+  const right = frontBlocked ? steerToRight : hullDelta > 0.1;
   const fire = Math.abs(turretDelta) < 0.2 && distanceToTarget < 560;
 
   bot.input = { up, down, left, right, fire, aimX, aimY };
+}
+
+function isBlockedAhead(bot: PlayerState, heading: number, distanceAhead: number) {
+  const radius = getTankRadius(bot);
+  const probeX = clamp(bot.x + Math.cos(heading) * distanceAhead, radius, state.map.width - radius);
+  const probeY = clamp(bot.y + Math.sin(heading) * distanceAhead, radius, state.map.height - radius);
+  return collides(probeX, probeY, radius);
+}
+
+function sampleClearance(bot: PlayerState, heading: number, maxDistance: number) {
+  const radius = getTankRadius(bot);
+  const step = 12;
+  for (let distanceStep = step; distanceStep <= maxDistance; distanceStep += step) {
+    const probeX = clamp(bot.x + Math.cos(heading) * distanceStep, radius, state.map.width - radius);
+    const probeY = clamp(bot.y + Math.sin(heading) * distanceStep, radius, state.map.height - radius);
+    if (collides(probeX, probeY, radius)) {
+      return distanceStep;
+    }
+  }
+  return maxDistance;
 }
 
 function pickBotTarget(bot: PlayerState) {
