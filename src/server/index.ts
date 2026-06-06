@@ -381,7 +381,8 @@ function getSpawnCandidates(team: ActiveTeam, slot?: number) {
     return [{ x: state.map.width / 2, y: state.map.height / 2 }];
   }
   if (typeof slot !== 'number') {
-    return spawns;
+    const start = Math.floor(Math.random() * spawns.length);
+    return [...spawns.slice(start), ...spawns.slice(0, start)];
   }
   const normalized = ((slot % spawns.length) + spawns.length) % spawns.length;
   return [spawns[normalized], ...spawns.slice(0, normalized), ...spawns.slice(normalized + 1)];
@@ -795,10 +796,19 @@ function getNavigableTarget(bot: PlayerState, target: Point) {
 
   let bestWaypoint: Point | undefined;
   let bestCost = Number.POSITIVE_INFINITY;
+  let bestReachableOnlyWaypoint: Point | undefined;
+  let bestReachableOnlyCost = Number.POSITIVE_INFINITY;
   for (const waypoint of getNavigationWaypoints()) {
     if (isPathBlocked(bot.x, bot.y, waypoint.x, waypoint.y, radius)) {
       continue;
     }
+
+    const distanceToTarget = distance(waypoint.x, waypoint.y, target.x, target.y);
+    if (distanceToTarget < bestReachableOnlyCost) {
+      bestReachableOnlyCost = distanceToTarget;
+      bestReachableOnlyWaypoint = waypoint;
+    }
+
     if (isPathBlocked(waypoint.x, waypoint.y, target.x, target.y, radius)) {
       continue;
     }
@@ -809,7 +819,9 @@ function getNavigableTarget(bot: PlayerState, target: Point) {
     }
   }
 
-  return bestWaypoint ?? target;
+  // If no one-hop waypoint reaches target directly, keep advancing to the best
+  // reachable waypoint and recompute on subsequent ticks.
+  return bestWaypoint ?? bestReachableOnlyWaypoint ?? target;
 }
 
 function getNavigationWaypoints() {
