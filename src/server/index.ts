@@ -1209,7 +1209,8 @@ function updateControlPoints(deltaSeconds: number) {
 
   const diff = Math.abs(redOwned - blueOwned);
   const loser: Exclude<ControlPointOwner, 'none'> = redOwned > blueOwned ? 'blue' : 'red';
-  state.score[loser] = Math.max(0, state.score[loser] - diff * CONTROL_POINT_BLEED_PER_POINT_PER_SECOND * deltaSeconds);
+  const nextReinforcements = Math.max(0, state.score[loser] - diff * CONTROL_POINT_BLEED_PER_POINT_PER_SECOND * deltaSeconds);
+  state.score[loser] = Math.round(nextReinforcements * 10) / 10;
   if (state.score[loser] <= 0) {
     const winnerTeam = loser === 'red' ? 'Blue Team' : 'Red Team';
     finishRound(winnerTeam, `${winnerTeam} drained all enemy reinforcements.`);

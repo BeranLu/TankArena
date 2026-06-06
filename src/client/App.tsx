@@ -34,6 +34,7 @@ const DEFAULT_MODE_SETTINGS: ModeSettings = {
 };
 
 const SUPPORT_URL = (((import.meta as { env?: { VITE_SUPPORT_URL?: string } }).env?.VITE_SUPPORT_URL)?.trim() ?? '');
+const UI_SNAPSHOT_INTERVAL_MS = 100;
 
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
@@ -69,6 +70,9 @@ export default function App() {
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<GameSnapshot | null>(null);
+  const latestSnapshotForUiRef = useRef<GameSnapshot | null>(null);
+  const lastUiSnapshotPushAtRef = useRef(0);
+  const uiSnapshotTimeoutRef = useRef<number | null>(null);
   const joinedRef = useRef(false);
   const observerRef = useRef(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
@@ -77,10 +81,6 @@ export default function App() {
   useEffect(() => {
     socketRef.current = socket;
   }, [socket]);
-
-  useEffect(() => {
-    snapshotRef.current = snapshot;
-  }, [snapshot]);
 
   useEffect(() => {
     joinedRef.current = joined;
@@ -100,12 +100,30 @@ export default function App() {
       setObserver(false);
       setIsAdmin(false);
       setCurrentLobby(null);
+      snapshotRef.current = null;
+      latestSnapshotForUiRef.current = null;
       setSnapshot(null);
       nextSocket.emit('listLobbies');
     };
 
     nextSocket.on('snapshot', (nextSnapshot) => {
-      setSnapshot(nextSnapshot);
+      snapshotRef.current = nextSnapshot;
+      latestSnapshotForUiRef.current = nextSnapshot;
+
+      const now = Date.now();
+      const elapsed = now - lastUiSnapshotPushAtRef.current;
+      if (elapsed >= UI_SNAPSHOT_INTERVAL_MS) {
+        lastUiSnapshotPushAtRef.current = now;
+        setSnapshot(nextSnapshot);
+      } else if (uiSnapshotTimeoutRef.current === null) {
+        const wait = UI_SNAPSHOT_INTERVAL_MS - elapsed;
+        uiSnapshotTimeoutRef.current = window.setTimeout(() => {
+          uiSnapshotTimeoutRef.current = null;
+          lastUiSnapshotPushAtRef.current = Date.now();
+          setSnapshot(latestSnapshotForUiRef.current);
+        }, wait);
+      }
+
       setIsAdmin(nextSnapshot.adminId === nextSocket.id);
     });
     nextSocket.on('lobbyList', (nextLobbies: LobbySummary[]) => {
@@ -130,6 +148,10 @@ export default function App() {
     });
 
     return () => {
+      if (uiSnapshotTimeoutRef.current !== null) {
+        window.clearTimeout(uiSnapshotTimeoutRef.current);
+        uiSnapshotTimeoutRef.current = null;
+      }
       nextSocket.close();
     };
   }, []);
@@ -199,13 +221,14 @@ export default function App() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !snapshot) {
+    if (!canvas) {
       return;
     }
     const context = canvas.getContext('2d');
     if (!context) {
       return;
     }
+
     const resize = () => {
       const ratio = window.devicePixelRatio || 1;
       const width = canvas.clientWidth;
@@ -213,13 +236,28 @@ export default function App() {
       canvas.width = Math.floor(width * ratio);
       canvas.height = Math.floor(height * ratio);
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      draw(context, snapshot);
+    };
+
+    let frameId = 0;
+    const render = () => {
+      const currentSnapshot = snapshotRef.current;
+      if (currentSnapshot) {
+        draw(context, currentSnapshot);
+      } else {
+        context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      }
+      frameId = window.requestAnimationFrame(render);
     };
 
     resize();
-    const frame = requestAnimationFrame(resize);
-    return () => cancelAnimationFrame(frame);
-  }, [snapshot]);
+    render();
+    window.addEventListener('resize', resize);
+
+    return () => {
+      window.removeEventListener('resize', resize);
+      window.cancelAnimationFrame(frameId);
+    };
+  }, []);
 
   const sortedPlayers = useMemo(() => {
     return [...(snapshot?.players ?? [])].sort((left, right) => right.score - left.score);
@@ -301,6 +339,8 @@ export default function App() {
       : snapshot?.mode === 'protect-the-king'
         ? `King HP ${snapshot?.modeSettings.kingHealth ?? DEFAULT_MODE_SETTINGS.kingHealth}`
         : `Reinforcements ${Math.ceil(snapshot?.score.red ?? 0)}-${Math.ceil(snapshot?.score.blue ?? 0)}`;
+
+  const formatTeamScore = (value: number) => (snapshot?.mode === 'control-points' ? Math.ceil(value) : value);
 
   const roundObjectiveLabel = snapshot?.roundResult
     ? snapshot.roundResult.mode === 'deathmatch'
@@ -461,8 +501,8 @@ export default function App() {
             <div className="statsGrid">
               <div><span>Players</span><strong>{snapshot?.activePlayers ?? 0}</strong></div>
               <div><span>Clients</span><strong>{snapshot?.connectedClients ?? 0}</strong></div>
-              <div><span>Red</span><strong>{snapshot?.score.red ?? 0}</strong></div>
-              <div><span>Blue</span><strong>{snapshot?.score.blue ?? 0}</strong></div>
+              <div><span>Red</span><strong>{formatTeamScore(snapshot?.score.red ?? 0)}</strong></div>
+              <div><span>Blue</span><strong>{formatTeamScore(snapshot?.score.blue ?? 0)}</strong></div>
               <div><span>Objective</span><strong>{activeTargetLabel}</strong></div>
             </div>
             <ul className="playerList">
