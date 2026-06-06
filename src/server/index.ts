@@ -620,18 +620,99 @@ function updateBotInput(bot: PlayerState) {
 
   const forwardProbeDistance = Math.max(28, Math.min(90, distanceToTarget * 0.35));
   const frontBlocked = isBlockedAhead(bot, bot.bodyAngle, forwardProbeDistance);
+  const blockedByPlayers = isBlockedByPlayersAhead(bot, bot.bodyAngle, 56);
   const leftClearance = sampleClearance(bot, bot.bodyAngle - Math.PI / 3, 120);
   const rightClearance = sampleClearance(bot, bot.bodyAngle + Math.PI / 3, 120);
   const steerToRight = rightClearance > leftClearance;
 
-  const up = distanceToTarget > 150 && !frontBlocked;
-  const down = distanceToTarget < 70;
-  const left = frontBlocked ? !steerToRight : hullDelta < -0.1;
-  const right = frontBlocked ? steerToRight : hullDelta > 0.1;
+  let turnDirection = 0;
+  if (frontBlocked) {
+    turnDirection = steerToRight ? 1 : -1;
+  } else if (hullDelta > 0.1) {
+    turnDirection = 1;
+  } else if (hullDelta < -0.1) {
+    turnDirection = -1;
+  }
+
+  const teammateAvoidance = getTeammateAvoidanceTurn(bot);
+  if (blockedByPlayers && teammateAvoidance !== 0) {
+    turnDirection = teammateAvoidance;
+  }
+
+  const botIndex = Number.parseInt(bot.id.replace('bot-', ''), 10) || 0;
+  const reversePulse = blockedByPlayers && Math.sin(Date.now() / 180 + botIndex) > 0.35;
+  const up = distanceToTarget > 150 && !frontBlocked && !blockedByPlayers;
+  const down = distanceToTarget < 70 || reversePulse;
+  const left = turnDirection < 0;
+  const right = turnDirection > 0;
   const combatDistance = combatTarget ? distance(bot.x, bot.y, combatTarget.x, combatTarget.y) : Number.POSITIVE_INFINITY;
   const fire = Boolean(combatTarget) && Math.abs(turretDelta) < 0.2 && combatDistance < 560;
 
   bot.input = { up, down, left, right, fire, aimX, aimY };
+}
+
+function isBlockedByPlayersAhead(bot: PlayerState, heading: number, distanceAhead: number) {
+  const fx = Math.cos(heading);
+  const fy = Math.sin(heading);
+  const botRadius = getTankRadius(bot);
+
+  for (const other of state.players.values()) {
+    if (other.id === bot.id || other.observer || other.health <= 0) {
+      continue;
+    }
+    const dx = other.x - bot.x;
+    const dy = other.y - bot.y;
+    const forwardProjection = dx * fx + dy * fy;
+    if (forwardProjection <= 0 || forwardProjection > distanceAhead) {
+      continue;
+    }
+    const lateralDistance = Math.abs(dx * fy - dy * fx);
+    const clearance = botRadius + getTankRadius(other) + 4;
+    if (lateralDistance < clearance) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getTeammateAvoidanceTurn(bot: PlayerState) {
+  if (bot.team !== 'red' && bot.team !== 'blue') {
+    return 0;
+  }
+
+  const fx = Math.cos(bot.bodyAngle);
+  const fy = Math.sin(bot.bodyAngle);
+  let steerRightScore = 0;
+  let steerLeftScore = 0;
+
+  for (const other of state.players.values()) {
+    if (other.id === bot.id || other.observer || other.health <= 0 || other.team !== bot.team) {
+      continue;
+    }
+    const dx = other.x - bot.x;
+    const dy = other.y - bot.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 0.01 || dist > 88) {
+      continue;
+    }
+    const forwardProjection = dx * fx + dy * fy;
+    if (forwardProjection <= -12) {
+      continue;
+    }
+    const side = fx * dy - fy * dx;
+    const weight = 1 / Math.max(10, dist);
+    if (side > 0) {
+      steerRightScore += weight;
+    } else {
+      steerLeftScore += weight;
+    }
+  }
+
+  if (Math.abs(steerRightScore - steerLeftScore) < 0.02) {
+    return 0;
+  }
+  return steerRightScore > steerLeftScore ? 1 : -1;
 }
 
 function getBotMovementTarget(bot: PlayerState) {
