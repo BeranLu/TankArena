@@ -19,6 +19,36 @@ Local-network multiplayer tank arena starter built with Express, Socket.IO, Reac
 
 The server listens on port `3001` and the Vite client listens on port `5173` in development.
 
+## Bot simulation and analysis
+
+The repository includes a deterministic, server-independent simulation harness for quickly testing bot combat behavior.
+
+- Run aggregate scenarios: `npm run bot:sim`
+- Run simulation tests only: `npx vitest run tests/simulation/bot-scenarios.test.ts`
+- Generate visual analysis from the newest trace: `npm run bot:analyze`
+
+Current built-in scenarios include:
+
+- Duel Open Field
+- Skirmish 3v3
+- Pressure 1v2
+- Wall Blocked Duel (solid wall between teams, useful for LOS/pathing regressions)
+
+To capture fresh traces before analysis, enable tracing for one run per scenario:
+
+```powershell
+$env:BOT_SIM_TRACE='1'
+$env:BOT_SIM_TRACE_RUNS='1'
+$env:BOT_SIM_TRACE_EVERY_STEPS='2'
+npm run bot:sim
+Remove-Item Env:BOT_SIM_TRACE
+Remove-Item Env:BOT_SIM_TRACE_RUNS
+Remove-Item Env:BOT_SIM_TRACE_EVERY_STEPS
+npm run bot:analyze
+```
+
+Generated files are written to `tests/simulation/output`.
+
 ## Run online (production)
 
 The project can run on the public internet with HTTPS and WebSocket support.

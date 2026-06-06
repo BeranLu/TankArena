@@ -1,0 +1,281 @@
+{
+  "source": "C:\\Scripts\\TankArena\\TankArena\\tests\\simulation\\output\\bot-traces-2026-06-06T23-35-05-596Z.json",
+  "summaries": [
+    {
+      "scenarioLabel": "Mirror Chaser / Duel Open Field / run 1",
+      "presetLabel": "Mirror Chaser",
+      "matchupLabel": "Duel Open Field",
+      "runLabel": "run 1",
+      "winner": "red",
+      "durationSec": 5.5,
+      "frames": 56,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.6071428571428571
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.6071428571428571
+      }
+    },
+    {
+      "scenarioLabel": "Mirror Chaser / Skirmish 3v3 / run 1",
+      "presetLabel": "Mirror Chaser",
+      "matchupLabel": "Skirmish 3v3",
+      "runLabel": "run 1",
+      "winner": "red",
+      "durationSec": 6.5,
+      "frames": 66,
+      "finalRedControl": 0.05,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.6750000000000004
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.6750000000000004
+      }
+    },
+    {
+      "scenarioLabel": "Mirror Chaser / Pressure 1v2 / run 1",
+      "presetLabel": "Mirror Chaser",
+      "matchupLabel": "Pressure 1v2",
+      "runLabel": "run 1",
+      "winner": "blue",
+      "durationSec": 3,
+      "frames": 31,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.013946448721654117,
+        "avgThrottleMagnitude": 0.7096774193548387
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.02714948693608887,
+        "avgThrottleMagnitude": 0.7580645161290323
+      }
+    },
+    {
+      "scenarioLabel": "Mirror Chaser / Wall Blocked Duel / run 1",
+      "presetLabel": "Mirror Chaser",
+      "matchupLabel": "Wall Blocked Duel",
+      "runLabel": "run 1",
+      "winner": "draw",
+      "durationSec": 19.900000000000002,
+      "frames": 200,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.32125
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0,
+        "avgThrottleMagnitude": 0.32125
+      }
+    },
+    {
+      "scenarioLabel": "Kiter (Red) vs Chaser (Blue) / Duel Open Field / run 1",
+      "presetLabel": "Kiter (Red) vs Chaser (Blue)",
+      "matchupLabel": "Duel Open Field",
+      "runLabel": "run 1",
+      "winner": "blue",
+      "durationSec": 5.5,
+      "frames": 56,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 0.5892857142857143,
+        "avgIdlePct": 0.10714285714285714,
+        "avgTurnMagnitude": 0.08154802755706957,
+        "avgThrottleMagnitude": 0.8928571428571429
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.019576316221225392,
+        "avgThrottleMagnitude": 1
+      }
+    },
+    {
+      "scenarioLabel": "Kiter (Red) vs Chaser (Blue) / Skirmish 3v3 / run 1",
+      "presetLabel": "Kiter (Red) vs Chaser (Blue)",
+      "matchupLabel": "Skirmish 3v3",
+      "runLabel": "run 1",
+      "winner": "blue",
+      "durationSec": 6.5,
+      "frames": 66,
+      "finalRedControl": 0,
+      "finalBlueControl": 1.3000000000000005,
+      "redRates": {
+        "avgFirePct": 0.5505050505050505,
+        "avgIdlePct": 0.0909090909090909,
+        "avgTurnMagnitude": 0.07155814513812266,
+        "avgThrottleMagnitude": 0.9090909090909091
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.017804315636869728,
+        "avgThrottleMagnitude": 1
+      }
+    },
+    {
+      "scenarioLabel": "Kiter (Red) vs Chaser (Blue) / Pressure 1v2 / run 1",
+      "presetLabel": "Kiter (Red) vs Chaser (Blue)",
+      "matchupLabel": "Pressure 1v2",
+      "runLabel": "run 1",
+      "winner": "blue",
+      "durationSec": 3,
+      "frames": 31,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 0.6129032258064516,
+        "avgIdlePct": 0.1935483870967742,
+        "avgTurnMagnitude": 0.07236323594736188,
+        "avgThrottleMagnitude": 0.8064516129032258
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.03257714233501759,
+        "avgThrottleMagnitude": 1
+      }
+    },
+    {
+      "scenarioLabel": "Kiter (Red) vs Chaser (Blue) / Wall Blocked Duel / run 1",
+      "presetLabel": "Kiter (Red) vs Chaser (Blue)",
+      "matchupLabel": "Wall Blocked Duel",
+      "runLabel": "run 1",
+      "winner": "draw",
+      "durationSec": 19.900000000000002,
+      "frames": 200,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 0.495,
+        "avgIdlePct": 0.92,
+        "avgTurnMagnitude": 0.06837678834826608,
+        "avgThrottleMagnitude": 0.08
+      },
+      "blueRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.0011439516372214833,
+        "avgThrottleMagnitude": 1
+      }
+    },
+    {
+      "scenarioLabel": "Chaser (Red) vs Kiter (Blue) / Duel Open Field / run 1",
+      "presetLabel": "Chaser (Red) vs Kiter (Blue)",
+      "matchupLabel": "Duel Open Field",
+      "runLabel": "run 1",
+      "winner": "red",
+      "durationSec": 5.5,
+      "frames": 56,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.019576316221225278,
+        "avgThrottleMagnitude": 1
+      },
+      "blueRates": {
+        "avgFirePct": 0.5892857142857143,
+        "avgIdlePct": 0.10714285714285714,
+        "avgTurnMagnitude": 0.08154802755706966,
+        "avgThrottleMagnitude": 0.8928571428571429
+      }
+    },
+    {
+      "scenarioLabel": "Chaser (Red) vs Kiter (Blue) / Skirmish 3v3 / run 1",
+      "presetLabel": "Chaser (Red) vs Kiter (Blue)",
+      "matchupLabel": "Skirmish 3v3",
+      "runLabel": "run 1",
+      "winner": "red",
+      "durationSec": 6.5,
+      "frames": 66,
+      "finalRedControl": 1.3000000000000005,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.017804315636869784,
+        "avgThrottleMagnitude": 1
+      },
+      "blueRates": {
+        "avgFirePct": 0.5505050505050505,
+        "avgIdlePct": 0.0909090909090909,
+        "avgTurnMagnitude": 0.07155814513812268,
+        "avgThrottleMagnitude": 0.9090909090909091
+      }
+    },
+    {
+      "scenarioLabel": "Chaser (Red) vs Kiter (Blue) / Pressure 1v2 / run 1",
+      "presetLabel": "Chaser (Red) vs Kiter (Blue)",
+      "matchupLabel": "Pressure 1v2",
+      "runLabel": "run 1",
+      "winner": "draw",
+      "durationSec": 4.2,
+      "frames": 43,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.02899843086642938,
+        "avgThrottleMagnitude": 1
+      },
+      "blueRates": {
+        "avgFirePct": 0.5930232558139534,
+        "avgIdlePct": 0.32558139534883723,
+        "avgTurnMagnitude": 0.10892408555811556,
+        "avgThrottleMagnitude": 0.6744186046511628
+      }
+    },
+    {
+      "scenarioLabel": "Chaser (Red) vs Kiter (Blue) / Wall Blocked Duel / run 1",
+      "presetLabel": "Chaser (Red) vs Kiter (Blue)",
+      "matchupLabel": "Wall Blocked Duel",
+      "runLabel": "run 1",
+      "winner": "draw",
+      "durationSec": 19.900000000000002,
+      "frames": 200,
+      "finalRedControl": 0,
+      "finalBlueControl": 0,
+      "redRates": {
+        "avgFirePct": 1,
+        "avgIdlePct": 0,
+        "avgTurnMagnitude": 0.0011439516372214623,
+        "avgThrottleMagnitude": 1
+      },
+      "blueRates": {
+        "avgFirePct": 0.495,
+        "avgIdlePct": 0.92,
+        "avgTurnMagnitude": 0.06837678834826608,
+        "avgThrottleMagnitude": 0.08
+      }
+    }
+  ]
+}
