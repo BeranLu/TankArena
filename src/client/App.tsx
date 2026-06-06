@@ -73,6 +73,15 @@ export default function App() {
     setSocket(nextSocket);
     nextSocket.emit('listLobbies');
 
+    const resetToLobbyBrowser = () => {
+      setJoined(false);
+      setObserver(false);
+      setIsAdmin(false);
+      setCurrentLobby(null);
+      setSnapshot(null);
+      nextSocket.emit('listLobbies');
+    };
+
     nextSocket.on('snapshot', (nextSnapshot) => {
       setSnapshot(nextSnapshot);
       setIsAdmin(nextSnapshot.adminId === nextSocket.id);
@@ -94,6 +103,9 @@ export default function App() {
       setSelectedLobbyId(payload.lobbyId);
     });
     nextSocket.on('message', (text) => setAnnouncement(text));
+    nextSocket.on('kicked', () => {
+      resetToLobbyBrowser();
+    });
 
     return () => {
       nextSocket.close();
@@ -190,6 +202,7 @@ export default function App() {
     return [...(snapshot?.players ?? [])].sort((left, right) => right.score - left.score);
   }, [snapshot]);
   const isLobby = snapshot?.phase === 'lobby';
+  const isCountdown = snapshot?.phase === 'countdown';
   const isFinished = snapshot?.phase === 'finished';
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
@@ -271,6 +284,9 @@ export default function App() {
         ? `Capture the Flag target: ${snapshot.modeSettings.ctfTarget} captures`
         : `Protect the King setting: ${snapshot.modeSettings.kingHealth} king HP`
     : '';
+  const countdownSeconds = snapshot?.countdownRemainingMs != null
+    ? Math.max(1, Math.ceil(snapshot.countdownRemainingMs / 1000))
+    : 0;
 
   function pushInput() {
     if (!socket || !joined || observer) {
@@ -388,6 +404,15 @@ export default function App() {
                   ))}
                 </ul>
                 <p className="resultHint">Admin: click Stop to lobby, then Start for the next round.</p>
+              </div>
+            </div>
+          ) : null}
+
+          {isCountdown ? (
+            <div className="roundResultOverlay">
+              <div className="roundResultCard">
+                <h3>Round Starting</h3>
+                <p className="resultWinner">{countdownSeconds}</p>
               </div>
             </div>
           ) : null}

@@ -55,6 +55,7 @@ type LobbyState = {
   name: string;
   password: string | null;
   phase: MatchPhase;
+  countdownEndsAt: number | null;
   mode: GameMode;
   map: ArenaMap;
   players: Map<string, PlayerState>;
@@ -274,6 +275,7 @@ io.on('connection', (socket) => {
     if (!targetName) {
       return;
     }
+    io.to(playerId).emit('kicked', { reason: 'You were removed from the lobby by admin.' });
     io.to(playerId).emit('message', 'You were removed from the lobby by admin.');
     leaveLobby(playerId, `${targetName} was removed by admin.`, false);
   });
@@ -397,8 +399,9 @@ io.on('connection', (socket) => {
       if (!isAdmin(socket.id) || state.phase !== 'lobby') {
         return;
       }
-      state.phase = 'running';
-      state.message = `${formatMode(state.mode)} started.`;
+      state.phase = 'countdown';
+      state.countdownEndsAt = Date.now() + 5000;
+      state.message = 'Round starts in 5...';
       resetRoundState();
       emitSnapshot();
       emitLobbyList();
@@ -411,7 +414,7 @@ io.on('connection', (socket) => {
       return;
     }
     runInLobby(runtime, () => {
-      if (!isAdmin(socket.id) || state.phase === 'lobby') {
+      if (!isAdmin(socket.id) || (state.phase !== 'running' && state.phase !== 'paused')) {
         return;
       }
       state.phase = state.phase === 'paused' ? 'running' : 'paused';
@@ -431,6 +434,7 @@ io.on('connection', (socket) => {
         return;
       }
       state.phase = 'lobby';
+      state.countdownEndsAt = null;
       state.message = 'Lobby reset. Players can ready up again.';
       resetRoundState();
       emitSnapshot();
@@ -485,6 +489,7 @@ function createLobbyState(id: string, name: string, password: string | null): Lo
     name,
     password,
     phase: 'lobby',
+    countdownEndsAt: null,
     mode: 'deathmatch',
     map: MAPS['cargo-yard'],
     players: new Map<string, PlayerState>(),
@@ -909,8 +914,12 @@ function broadcast(message: string) {
 }
 
 function buildSnapshot(): GameSnapshot {
+  const countdownRemainingMs = state.phase === 'countdown' && state.countdownEndsAt
+    ? Math.max(0, state.countdownEndsAt - Date.now())
+    : null;
   return {
     phase: state.phase,
+    countdownRemainingMs,
     mode: state.mode,
     modeSettings: state.modeSettings,
     map: state.map,
@@ -969,6 +978,18 @@ function near(value: number, target: number) {
 }
 
 function gameLoop() {
+  if (state.phase === 'countdown') {
+    const remaining = state.countdownEndsAt ? state.countdownEndsAt - Date.now() : 0;
+    if (remaining <= 0) {
+      state.phase = 'running';
+      state.countdownEndsAt = null;
+      state.message = `${formatMode(state.mode)} started.`;
+      emitLobbyList();
+    }
+    emitSnapshot();
+    return;
+  }
+
   if (state.phase === 'paused' || state.phase === 'finished') {
     emitSnapshot();
     return;
@@ -1718,6 +1739,7 @@ function resetRoundState() {
 
 function finishRound(winner: string, reason: string) {
   state.phase = 'finished';
+  state.countdownEndsAt = null;
   state.message = reason;
   state.projectiles.clear();
   state.roundResult = {

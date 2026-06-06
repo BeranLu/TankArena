@@ -1,5 +1,5 @@
 export type GameMode = 'deathmatch' | 'capture-the-flag' | 'protect-the-king';
-export type MatchPhase = 'lobby' | 'running' | 'paused' | 'finished';
+export type MatchPhase = 'lobby' | 'countdown' | 'running' | 'paused' | 'finished';
 export type TeamId = 'red' | 'blue' | 'none' | 'observer';
 
 export interface ModeSettings {
@@ -80,6 +80,7 @@ export interface ProjectileSnapshot {
 
 export interface GameSnapshot {
   phase: MatchPhase;
+  countdownRemainingMs: number | null;
   mode: GameMode;
   modeSettings: ModeSettings;
   map: ArenaMap;
@@ -130,4 +131,5 @@ export interface ServerToClientEvents {
   joined: (payload: { observer: boolean; admin: boolean; team: TeamId; lobbyId: string; lobbyName: string }) => void;
   lobbyList: (lobbies: LobbySummary[]) => void;
   message: (text: string) => void;
+  kicked: (payload: { reason: string }) => void;
 }
