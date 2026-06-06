@@ -746,6 +746,14 @@ function getBotMovementTarget(bot: PlayerState) {
     return getDefenderPatrolPoint(bot, ownBase);
   }
 
+  // Highest priority for attackers: retrieve own flag if an enemy stole it.
+  if (ownFlag.carriedBy) {
+    const thief = state.players.get(ownFlag.carriedBy);
+    if (thief && !thief.observer && thief.health > 0) {
+      return { x: thief.x, y: thief.y };
+    }
+  }
+
   if (enemyFlag.carriedBy) {
     if (enemyFlag.carriedBy === bot.id) {
       return ownBase;
