@@ -271,4 +271,209 @@ describe('Lobby integration', () => {
     const lobbies = await waitForLobbyList(client, (list) => !list.some((lobby) => lobby.name === 'Temp Lobby'));
     expect(lobbies.some((lobby) => lobby.name === 'Temp Lobby')).toBe(false);
   });
+
+  it('reassigns admin to next joined human when admin leaves', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Admin Leave', playerName: 'Admin', clientKey: 'admin-leave' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const guestA = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guestA, 'lobbyList');
+    guestA.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'GuestA', clientKey: 'guest-a' });
+    await onceEvent(guestA, 'joined');
+
+    const guestB = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guestB, 'lobbyList');
+    guestB.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'GuestB', clientKey: 'guest-b' });
+    await onceEvent(guestB, 'joined');
+
+    admin.emit('leaveLobby');
+
+    const snapshot = await waitForSnapshot(guestA, (next) => next.adminId !== admin.id && next.adminId !== null);
+    expect(snapshot.adminId).toBe(guestA.id);
+  });
+
+  it('enforces transferAdmin permissions and allows valid admin transfer', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Transfer Rules', playerName: 'Admin', clientKey: 'admin-transfer' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Guest', clientKey: 'guest-transfer' });
+    await onceEvent(guest, 'joined');
+
+    guest.emit('transferAdmin', { playerId: guest.id! });
+    const unchanged = await waitForSnapshot(admin, (next) => next.players.some((p) => p.id === guest.id));
+    expect(unchanged.adminId).toBe(admin.id);
+
+    admin.emit('transferAdmin', { playerId: guest.id! });
+    const changed = await waitForSnapshot(guest, (next) => next.adminId === guest.id);
+    expect(changed.adminId).toBe(guest.id);
+  });
+
+  it('applies kick edge-case rules (no self-kick, no bot-kick, no non-admin kick)', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Kick Edge', playerName: 'Admin', clientKey: 'admin-kick-edge' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Guest', clientKey: 'guest-kick-edge' });
+    await onceEvent(guest, 'joined');
+
+    admin.emit('addBot');
+    const withBot = await waitForSnapshot(admin, (next) => next.players.some((p) => p.isBot));
+    const bot = withBot.players.find((p) => p.isBot);
+    expect(bot).toBeTruthy();
+
+    admin.emit('kickPlayer', { playerId: admin.id! });
+    await expectNoEvent(admin, 'kicked');
+    const afterSelfKick = await waitForSnapshot(admin, (next) => next.players.some((p) => p.id === admin.id));
+    expect(afterSelfKick.players.some((p) => p.id === admin.id)).toBe(true);
+
+    admin.emit('kickPlayer', { playerId: bot!.id });
+    const afterBotKickAttempt = await waitForSnapshot(admin, (next) => next.players.some((p) => p.id === bot!.id));
+    expect(afterBotKickAttempt.players.some((p) => p.id === bot!.id)).toBe(true);
+
+    guest.emit('kickPlayer', { playerId: admin.id! });
+    await expectNoEvent(admin, 'kicked');
+    const afterGuestKickAttempt = await waitForSnapshot(admin, (next) => next.players.some((p) => p.id === admin.id));
+    expect(afterGuestKickAttempt.players.some((p) => p.id === admin.id)).toBe(true);
+  });
+
+  it('ignores pause during countdown and allows resetLobby to return to lobby', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Countdown Controls', playerName: 'Admin', clientKey: 'admin-countdown-controls' });
+    await onceEvent(admin, 'joined');
+
+    admin.emit('startMatch');
+    await waitForSnapshot(admin, (next) => next.phase === 'countdown');
+
+    admin.emit('togglePause');
+    const stillCountdown = await waitForSnapshot(admin, (next) => next.phase === 'countdown');
+    expect(stillCountdown.phase).toBe('countdown');
+
+    admin.emit('resetLobby');
+    const backToLobby = await waitForSnapshot(admin, (next) => next.phase === 'lobby');
+    expect(backToLobby.phase).toBe('lobby');
+  });
+
+  it('recovers player identity on reconnect within grace and expires after grace', async () => {
+    const server = await startServer({ RECONNECT_GRACE_MS: '500' });
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Reconnect Test', playerName: 'Admin', clientKey: 'admin-reconnect' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    let guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'OriginalName', clientKey: 'guest-reconnect' });
+    await onceEvent(guest, 'joined');
+
+    guest.disconnect();
+    guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'DifferentName', clientKey: 'guest-reconnect' });
+    await onceEvent(guest, 'joined');
+
+    const restored = await waitForSnapshot(admin, (next) => next.players.some((p) => p.name === 'OriginalName'));
+    expect(restored.players.some((p) => p.name === 'OriginalName')).toBe(true);
+
+    guest.disconnect();
+    await sleep(900);
+    guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'NewAfterExpiry', clientKey: 'guest-reconnect' });
+    await onceEvent(guest, 'joined');
+
+    const expired = await waitForSnapshot(admin, (next) => next.players.some((p) => p.name === 'NewAfterExpiry'));
+    expect(expired.players.some((p) => p.name === 'NewAfterExpiry')).toBe(true);
+  });
+
+  it('allows joining private lobby with correct password and marks it as protected', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Private Success', playerName: 'Admin', password: 'pw-ok', clientKey: 'admin-private-success' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const browser = await connectClient(server.port);
+    const lobbies = await waitForLobbyList(browser, (list) => list.some((lobby) => lobby.id === joined.lobbyId));
+    const lobby = lobbies.find((entry) => entry.id === joined.lobbyId);
+    expect(lobby?.requiresPassword).toBe(true);
+
+    const guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Guest', password: 'pw-ok', clientKey: 'guest-private-success' });
+    const guestJoined = await onceEvent<{ lobbyId: string }>(guest, 'joined');
+    expect(guestJoined.lobbyId).toBe(joined.lobbyId);
+  });
+
+  it('cancels empty-lobby cleanup when a player rejoins before grace expires', async () => {
+    const server = await startServer({ EMPTY_LOBBY_GRACE_MS: '1000' });
+    const owner = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(owner, 'lobbyList');
+
+    owner.emit('createLobby', { name: 'Cancel Cleanup', playerName: 'Owner', clientKey: 'owner-cancel-cleanup' });
+    const joined = await onceEvent<{ lobbyId: string }>(owner, 'joined');
+
+    const rejoiner = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(rejoiner, 'lobbyList');
+
+    owner.emit('leaveLobby');
+    await sleep(250);
+    rejoiner.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Rejoiner', clientKey: 'rejoiner-cancel-cleanup' });
+    await onceEvent(rejoiner, 'joined');
+
+    await sleep(1200);
+    const lobbies = await waitForLobbyList(rejoiner, (list) => list.some((lobby) => lobby.id === joined.lobbyId));
+    expect(lobbies.some((lobby) => lobby.id === joined.lobbyId)).toBe(true);
+  });
+
+  it('isolates lobby state and events across two lobbies', async () => {
+    const server = await startServer();
+
+    const adminA = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(adminA, 'lobbyList');
+    adminA.emit('createLobby', { name: 'Iso A', playerName: 'AdminA', clientKey: 'admin-iso-a' });
+    const joinedA = await onceEvent<{ lobbyId: string }>(adminA, 'joined');
+
+    const adminB = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(adminB, 'lobbyList');
+    adminB.emit('createLobby', { name: 'Iso B', playerName: 'AdminB', clientKey: 'admin-iso-b' });
+    const joinedB = await onceEvent<{ lobbyId: string }>(adminB, 'joined');
+
+    const guestA = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guestA, 'lobbyList');
+    guestA.emit('joinLobby', { lobbyId: joinedA.lobbyId, name: 'GuestA', clientKey: 'guest-iso-a' });
+    await onceEvent(guestA, 'joined');
+
+    const guestB = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guestB, 'lobbyList');
+    guestB.emit('joinLobby', { lobbyId: joinedB.lobbyId, name: 'GuestB', clientKey: 'guest-iso-b' });
+    await onceEvent(guestB, 'joined');
+
+    adminA.emit('addBot');
+
+    const snapshotA = await waitForSnapshot(adminA, (next) => next.players.some((p) => p.isBot));
+    expect(snapshotA.players.some((p) => p.isBot)).toBe(true);
+
+    const snapshotB = await waitForSnapshot(adminB, (next) => next.players.length >= 2);
+    expect(snapshotB.players.some((p) => p.isBot)).toBe(false);
+  });
 });
