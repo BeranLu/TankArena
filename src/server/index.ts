@@ -34,6 +34,7 @@ type ProjectileState = ProjectileSnapshot & {
 };
 
 type FlagState = { x: number; y: number; homeX: number; homeY: number; carriedBy: string | null };
+type Point = { x: number; y: number };
 
 const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
@@ -606,8 +607,10 @@ function updateBotInput(bot: PlayerState) {
     return;
   }
 
-  const moveTargetX = movementTarget?.x ?? combatTarget?.x ?? bot.x;
-  const moveTargetY = movementTarget?.y ?? combatTarget?.y ?? bot.y;
+  const desiredMoveTarget = movementTarget ?? (combatTarget ? { x: combatTarget.x, y: combatTarget.y } : undefined);
+  const moveTarget = desiredMoveTarget ? getNavigableTarget(bot, desiredMoveTarget) : { x: bot.x, y: bot.y };
+  const moveTargetX = moveTarget.x;
+  const moveTargetY = moveTarget.y;
   const aimX = combatTarget?.x ?? moveTargetX;
   const aimY = combatTarget?.y ?? moveTargetY;
   const targetAngle = Math.atan2(moveTargetY - bot.y, moveTargetX - bot.x);
@@ -653,10 +656,11 @@ function getBotMovementTarget(bot: PlayerState) {
         return { x: carrier.x, y: carrier.y };
       }
     }
-    return {
-      x: ownBase.x + (team === 'red' ? 60 : -60),
-      y: ownBase.y,
-    };
+    const intruder = findNearestEnemyNearPoint(bot, ownBase, 320);
+    if (intruder) {
+      return { x: intruder.x, y: intruder.y };
+    }
+    return getDefenderPatrolPoint(bot, ownBase);
   }
 
   if (enemyFlag.carriedBy) {
@@ -670,6 +674,101 @@ function getBotMovementTarget(bot: PlayerState) {
   }
 
   return { x: enemyFlag.x, y: enemyFlag.y };
+}
+
+function getDefenderPatrolPoint(bot: PlayerState, base: Point) {
+  const idNumber = Number.parseInt(bot.id.replace('bot-', ''), 10);
+  const slot = Number.isFinite(idNumber) ? idNumber : 0;
+  const phase = Date.now() / 1000 + slot * 0.9;
+  const radius = 70;
+  return {
+    x: clamp(base.x + Math.cos(phase) * radius, PLAYER_RADIUS, state.map.width - PLAYER_RADIUS),
+    y: clamp(base.y + Math.sin(phase * 0.7) * radius, PLAYER_RADIUS, state.map.height - PLAYER_RADIUS),
+  };
+}
+
+function findNearestEnemyNearPoint(bot: PlayerState, point: Point, maxDistance: number) {
+  let nearest: PlayerState | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of state.players.values()) {
+    if (candidate.id === bot.id || candidate.observer || candidate.health <= 0) {
+      continue;
+    }
+    if (state.phase === 'running' && bot.team !== 'none' && candidate.team === bot.team) {
+      continue;
+    }
+    const d = distance(point.x, point.y, candidate.x, candidate.y);
+    if (d <= maxDistance && d < nearestDistance) {
+      nearest = candidate;
+      nearestDistance = d;
+    }
+  }
+  return nearest;
+}
+
+function getNavigableTarget(bot: PlayerState, target: Point) {
+  const radius = getTankRadius(bot);
+  if (!isPathBlocked(bot.x, bot.y, target.x, target.y, radius)) {
+    return target;
+  }
+
+  let bestWaypoint: Point | undefined;
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (const waypoint of getNavigationWaypoints()) {
+    if (isPathBlocked(bot.x, bot.y, waypoint.x, waypoint.y, radius)) {
+      continue;
+    }
+    if (isPathBlocked(waypoint.x, waypoint.y, target.x, target.y, radius)) {
+      continue;
+    }
+    const cost = distance(bot.x, bot.y, waypoint.x, waypoint.y) + distance(waypoint.x, waypoint.y, target.x, target.y);
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestWaypoint = waypoint;
+    }
+  }
+
+  return bestWaypoint ?? target;
+}
+
+function getNavigationWaypoints() {
+  const margin = PLAYER_RADIUS + 8;
+  const points: Point[] = [
+    { x: state.map.width / 2, y: state.map.height / 2 },
+    state.map.redBase,
+    state.map.blueBase,
+    state.map.redFlag,
+    state.map.blueFlag,
+  ];
+
+  for (const obstacle of state.map.obstacles) {
+    points.push(
+      { x: obstacle.x - margin, y: obstacle.y - margin },
+      { x: obstacle.x + obstacle.width + margin, y: obstacle.y - margin },
+      { x: obstacle.x - margin, y: obstacle.y + obstacle.height + margin },
+      { x: obstacle.x + obstacle.width + margin, y: obstacle.y + obstacle.height + margin },
+    );
+  }
+
+  return points
+    .map((point) => ({
+      x: clamp(point.x, PLAYER_RADIUS, state.map.width - PLAYER_RADIUS),
+      y: clamp(point.y, PLAYER_RADIUS, state.map.height - PLAYER_RADIUS),
+    }))
+    .filter((point, index, all) => all.findIndex((other) => distance(other.x, other.y, point.x, point.y) < 1) === index);
+}
+
+function isPathBlocked(ax: number, ay: number, bx: number, by: number, radius: number) {
+  const steps = Math.max(6, Math.ceil(distance(ax, ay, bx, by) / 24));
+  for (let index = 1; index <= steps; index += 1) {
+    const t = index / steps;
+    const x = ax + (bx - ax) * t;
+    const y = ay + (by - ay) * t;
+    if (collides(x, y, radius)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isDefenderBot(bot: PlayerState) {
