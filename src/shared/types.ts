@@ -1,11 +1,25 @@
-export type GameMode = 'deathmatch' | 'capture-the-flag' | 'protect-the-king';
+export type GameMode = 'deathmatch' | 'capture-the-flag' | 'protect-the-king' | 'control-points';
 export type MatchPhase = 'lobby' | 'countdown' | 'running' | 'paused' | 'finished';
 export type TeamId = 'red' | 'blue' | 'none' | 'observer';
+export type ControlPointOwner = Exclude<TeamId, 'observer'>;
 
 export interface ModeSettings {
   deathmatchTarget: number;
   ctfTarget: number;
   kingHealth: number;
+  controlPointsReinforcements: number;
+}
+
+export interface ControlPointDefinition {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
+export interface ControlPointSnapshot extends ControlPointDefinition {
+  owner: ControlPointOwner;
+  progress: number;
 }
 
 export interface RoundResultEntry {
@@ -38,6 +52,7 @@ export interface ArenaMap {
   blueFlag: { x: number; y: number };
   redKing: { x: number; y: number };
   blueKing: { x: number; y: number };
+  controlPoints: ControlPointDefinition[];
 }
 
 export interface PlayerInput {
@@ -86,6 +101,7 @@ export interface GameSnapshot {
   map: ArenaMap;
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
+  controlPoints: ControlPointSnapshot[];
   flagsHome: { red: boolean; blue: boolean };
   kingHealth: { red: number; blue: number };
   score: { red: number; blue: number };

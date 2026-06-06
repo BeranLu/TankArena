@@ -6,6 +6,7 @@ const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
   'capture-the-flag': 'Capture the Flag',
   'protect-the-king': 'Protect the King',
+  'control-points': 'Control Points',
 };
 
 const TEAM_COLORS: Record<TeamId, string> = {
@@ -29,6 +30,7 @@ const DEFAULT_MODE_SETTINGS: ModeSettings = {
   deathmatchTarget: 10,
   ctfTarget: 3,
   kingHealth: 500,
+  controlPointsReinforcements: 300,
 };
 
 const SUPPORT_URL = (((import.meta as { env?: { VITE_SUPPORT_URL?: string } }).env?.VITE_SUPPORT_URL)?.trim() ?? '');
@@ -296,14 +298,18 @@ export default function App() {
     ? `Target ${snapshot?.modeSettings.deathmatchTarget ?? DEFAULT_MODE_SETTINGS.deathmatchTarget}`
     : snapshot?.mode === 'capture-the-flag'
       ? `Target ${snapshot?.modeSettings.ctfTarget ?? DEFAULT_MODE_SETTINGS.ctfTarget}`
-      : `King HP ${snapshot?.modeSettings.kingHealth ?? DEFAULT_MODE_SETTINGS.kingHealth}`;
+      : snapshot?.mode === 'protect-the-king'
+        ? `King HP ${snapshot?.modeSettings.kingHealth ?? DEFAULT_MODE_SETTINGS.kingHealth}`
+        : `Reinforcements ${Math.ceil(snapshot?.score.red ?? 0)}-${Math.ceil(snapshot?.score.blue ?? 0)}`;
 
   const roundObjectiveLabel = snapshot?.roundResult
     ? snapshot.roundResult.mode === 'deathmatch'
       ? `Team Deathmatch target: ${snapshot.modeSettings.deathmatchTarget} points`
       : snapshot.roundResult.mode === 'capture-the-flag'
         ? `Capture the Flag target: ${snapshot.modeSettings.ctfTarget} captures`
-        : `Protect the King setting: ${snapshot.modeSettings.kingHealth} king HP`
+        : snapshot.roundResult.mode === 'protect-the-king'
+          ? `Protect the King setting: ${snapshot.modeSettings.kingHealth} king HP`
+          : `Control Points reinforcements: ${snapshot.modeSettings.controlPointsReinforcements}`
     : '';
   const countdownSeconds = snapshot?.countdownRemainingMs != null
     ? Math.max(1, Math.ceil(snapshot.countdownRemainingMs / 1000))
@@ -498,6 +504,7 @@ export default function App() {
                 <option value="deathmatch">Team Deathmatch</option>
                 <option value="capture-the-flag">Capture the Flag</option>
                 <option value="protect-the-king">Protect the King</option>
+                <option value="control-points">Control Points</option>
               </select>
             </label>
             <label className="field">
@@ -561,6 +568,23 @@ export default function App() {
                 }}
               />
             </label>
+            <label className="field">
+              <span>Control Points reinforcements</span>
+              <input
+                type="number"
+                min={50}
+                max={2000}
+                step={10}
+                value={adminSettings.controlPointsReinforcements}
+                onChange={(event) => {
+                  const next = Number.parseInt(event.target.value, 10);
+                  setAdminSettings((current) => ({
+                    ...current,
+                    controlPointsReinforcements: Number.isFinite(next) ? next : current.controlPointsReinforcements,
+                  }));
+                }}
+              />
+            </label>
             <div className="controlsRow wrap">
               <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isLobby}>Apply mode</button>
               <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isLobby}>Apply map</button>
@@ -615,6 +639,30 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
     drawMarker(context, snapshot.map.blueBase.x, snapshot.map.blueBase.y, '#66c7ff', 'B');
     drawFlag(context, snapshot.map.redFlag.x, snapshot.map.redFlag.y, '#ff6b6b', snapshot.flagsHome.red);
     drawFlag(context, snapshot.map.blueFlag.x, snapshot.map.blueFlag.y, '#66c7ff', snapshot.flagsHome.blue);
+  }
+
+  if (snapshot.mode === 'control-points') {
+    for (const point of snapshot.controlPoints) {
+      const ownerColor = point.owner === 'red' ? '#ff6b6b' : point.owner === 'blue' ? '#66c7ff' : '#cbd5e1';
+      context.strokeStyle = ownerColor;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.arc(point.x, point.y, 24, 0, Math.PI * 2);
+      context.stroke();
+
+      const normalizedProgress = Math.min(1, Math.abs(point.progress) / 100);
+      context.fillStyle = ownerColor;
+      context.globalAlpha = 0.18 + normalizedProgress * 0.32;
+      context.beginPath();
+      context.arc(point.x, point.y, 19, 0, Math.PI * 2);
+      context.fill();
+      context.globalAlpha = 1;
+
+      context.fillStyle = '#f8fafc';
+      context.font = 'bold 14px sans-serif';
+      context.textAlign = 'center';
+      context.fillText(point.label, point.x, point.y + 5);
+    }
   }
 
   for (const projectile of snapshot.projectiles) {

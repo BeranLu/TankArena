@@ -9,6 +9,9 @@ import { Server, Socket } from 'socket.io';
 import type {
   ArenaMap,
   ClientToServerEvents,
+  ControlPointDefinition,
+  ControlPointOwner,
+  ControlPointSnapshot,
   GameMode,
   GameSnapshot,
   LobbySummary,
@@ -61,6 +64,7 @@ type LobbyState = {
   players: Map<string, PlayerState>;
   reconnectCache: Map<string, RecoverablePlayer>;
   projectiles: Map<string, ProjectileState>;
+  controlPoints: ControlPointSnapshot[];
   redFlag: FlagState;
   blueFlag: FlagState;
   score: { red: number; blue: number };
@@ -93,6 +97,10 @@ const RESPAWN_SHIELD_MS = 5000;
 const DEFAULT_CTF_WIN_SCORE = 3;
 const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
 const DEFAULT_KING_HEALTH = 500;
+const DEFAULT_CONTROL_POINTS_REINFORCEMENTS = 300;
+const CONTROL_POINT_CAPTURE_RADIUS = 90;
+const CONTROL_POINT_CAPTURE_RATE_PER_PLAYER = 30;
+const CONTROL_POINT_BLEED_PER_POINT_PER_SECOND = 1.2;
 const BOT_NAME_PREFIX = 'BOT';
 const MAX_LOBBIES = parseLimit(process.env.MAX_LOBBIES, 8);
 const MAX_PLAYERS_PER_LOBBY = parseLimit(process.env.MAX_PLAYERS_PER_LOBBY, 10);
@@ -126,6 +134,11 @@ const MAPS: Record<string, ArenaMap> = {
     blueFlag: { x: 1135, y: 400 },
     redKing: { x: 170, y: 400 },
     blueKing: { x: 1110, y: 400 },
+    controlPoints: [
+      { id: 'cp-a', label: 'A', x: 360, y: 180 },
+      { id: 'cp-b', label: 'B', x: 640, y: 400 },
+      { id: 'cp-c', label: 'C', x: 920, y: 620 },
+    ],
   },
   'iron-pass': {
     id: 'iron-pass',
@@ -149,6 +162,11 @@ const MAPS: Record<string, ArenaMap> = {
     blueFlag: { x: 950, y: 380 },
     redKing: { x: 300, y: 380 },
     blueKing: { x: 920, y: 380 },
+    controlPoints: [
+      { id: 'cp-a', label: 'A', x: 380, y: 195 },
+      { id: 'cp-b', label: 'B', x: 610, y: 380 },
+      { id: 'cp-c', label: 'C', x: 840, y: 565 },
+    ],
   },
   'dune-stronghold': {
     id: 'dune-stronghold',
@@ -172,6 +190,11 @@ const MAPS: Record<string, ArenaMap> = {
     blueFlag: { x: 1150, y: 410 },
     redKing: { x: 190, y: 410 },
     blueKing: { x: 1110, y: 410 },
+    controlPoints: [
+      { id: 'cp-a', label: 'A', x: 360, y: 410 },
+      { id: 'cp-b', label: 'B', x: 650, y: 410 },
+      { id: 'cp-c', label: 'C', x: 940, y: 410 },
+    ],
   },
   'frostline': {
     id: 'frostline',
@@ -196,6 +219,11 @@ const MAPS: Record<string, ArenaMap> = {
     blueFlag: { x: 1090, y: 390 },
     redKing: { x: 190, y: 390 },
     blueKing: { x: 1050, y: 390 },
+    controlPoints: [
+      { id: 'cp-a', label: 'A', x: 340, y: 390 },
+      { id: 'cp-b', label: 'B', x: 620, y: 390 },
+      { id: 'cp-c', label: 'C', x: 900, y: 390 },
+    ],
   },
   'reactor-ridge': {
     id: 'reactor-ridge',
@@ -220,6 +248,11 @@ const MAPS: Record<string, ArenaMap> = {
     blueFlag: { x: 1165, y: 410 },
     redKing: { x: 195, y: 410 },
     blueKing: { x: 1125, y: 410 },
+    controlPoints: [
+      { id: 'cp-a', label: 'A', x: 390, y: 410 },
+      { id: 'cp-b', label: 'B', x: 660, y: 410 },
+      { id: 'cp-c', label: 'C', x: 930, y: 410 },
+    ],
   },
 };
 
@@ -423,6 +456,7 @@ io.on('connection', (socket) => {
         return;
       }
       state.map = map;
+      state.controlPoints = createControlPointsForMap(map);
       resetWorld(true);
       emitSnapshot();
       emitLobbyList();
@@ -566,6 +600,7 @@ function createLobbyState(id: string, name: string, password: string | null): Lo
     players: new Map<string, PlayerState>(),
     reconnectCache: new Map<string, RecoverablePlayer>(),
     projectiles: new Map<string, ProjectileState>(),
+    controlPoints: createControlPointsForMap(MAPS['cargo-yard']),
     redFlag: { x: MAPS['cargo-yard'].redFlag.x, y: MAPS['cargo-yard'].redFlag.y, homeX: MAPS['cargo-yard'].redFlag.x, homeY: MAPS['cargo-yard'].redFlag.y, carriedBy: null },
     blueFlag: { x: MAPS['cargo-yard'].blueFlag.x, y: MAPS['cargo-yard'].blueFlag.y, homeX: MAPS['cargo-yard'].blueFlag.x, homeY: MAPS['cargo-yard'].blueFlag.y, carriedBy: null },
     score: { red: 0, blue: 0 },
@@ -573,6 +608,7 @@ function createLobbyState(id: string, name: string, password: string | null): Lo
       deathmatchTarget: DEFAULT_TEAM_DEATHMATCH_WIN_SCORE,
       ctfTarget: DEFAULT_CTF_WIN_SCORE,
       kingHealth: DEFAULT_KING_HEALTH,
+      controlPointsReinforcements: DEFAULT_CONTROL_POINTS_REINFORCEMENTS,
     },
     adminId: null,
     nextBotId: 1,
@@ -1020,6 +1056,7 @@ function buildSnapshot(): GameSnapshot {
       y: projectile.y,
       team: projectile.team,
     })),
+    controlPoints: state.controlPoints.map((point) => ({ ...point })),
     flagsHome: { red: state.redFlag.carriedBy === null && near(state.redFlag.x, state.redFlag.homeX) && near(state.redFlag.y, state.redFlag.homeY), blue: state.blueFlag.carriedBy === null && near(state.blueFlag.x, state.blueFlag.homeX) && near(state.blueFlag.y, state.blueFlag.homeY) },
     kingHealth: { red: getTeamKingHealth('red'), blue: getTeamKingHealth('blue') },
     score: state.score,
@@ -1036,6 +1073,7 @@ function sanitizeModeSettings(settings: ModeSettings): ModeSettings {
     deathmatchTarget: clampInt(settings.deathmatchTarget, 1, 200),
     ctfTarget: clampInt(settings.ctfTarget, 1, 20),
     kingHealth: clampInt(settings.kingHealth, BASE_HEALTH, 5000),
+    controlPointsReinforcements: clampInt(settings.controlPointsReinforcements, 50, 2000),
   };
 }
 
@@ -1122,7 +1160,69 @@ function gameLoop() {
   }
 
   updateProjectiles(TICK_MS / 1000);
+  if (updateControlPoints(TICK_MS / 1000)) {
+    emitSnapshot();
+    return;
+  }
   emitSnapshot();
+}
+
+function updateControlPoints(deltaSeconds: number) {
+  if (state.phase !== 'running' || state.mode !== 'control-points') {
+    return false;
+  }
+
+  for (const point of state.controlPoints) {
+    const redNearby = countNearbyPlayers('red', point.x, point.y, CONTROL_POINT_CAPTURE_RADIUS);
+    const blueNearby = countNearbyPlayers('blue', point.x, point.y, CONTROL_POINT_CAPTURE_RADIUS);
+    const previousOwner = point.owner;
+
+    if (redNearby > 0 && blueNearby === 0) {
+      point.progress = clamp(point.progress + CONTROL_POINT_CAPTURE_RATE_PER_PLAYER * redNearby * deltaSeconds, -100, 100);
+    } else if (blueNearby > 0 && redNearby === 0) {
+      point.progress = clamp(point.progress - CONTROL_POINT_CAPTURE_RATE_PER_PLAYER * blueNearby * deltaSeconds, -100, 100);
+    }
+
+    if (point.progress >= 100) {
+      point.owner = 'red';
+    } else if (point.progress <= -100) {
+      point.owner = 'blue';
+    } else if ((point.owner === 'red' && point.progress <= 0) || (point.owner === 'blue' && point.progress >= 0)) {
+      point.owner = 'none';
+    }
+
+    if (point.owner !== previousOwner) {
+      if (point.owner === 'none') {
+        state.message = `Point ${point.label} is neutral.`;
+      } else {
+        state.message = `${point.owner === 'red' ? 'Red Team' : 'Blue Team'} captured point ${point.label}.`;
+      }
+      io.to(lobbyRoom(state.id)).emit('message', state.message);
+    }
+  }
+
+  const redOwned = state.controlPoints.filter((point) => point.owner === 'red').length;
+  const blueOwned = state.controlPoints.filter((point) => point.owner === 'blue').length;
+  if (redOwned === blueOwned) {
+    return false;
+  }
+
+  const diff = Math.abs(redOwned - blueOwned);
+  const loser: Exclude<ControlPointOwner, 'none'> = redOwned > blueOwned ? 'blue' : 'red';
+  state.score[loser] = Math.max(0, state.score[loser] - diff * CONTROL_POINT_BLEED_PER_POINT_PER_SECOND * deltaSeconds);
+  if (state.score[loser] <= 0) {
+    const winnerTeam = loser === 'red' ? 'Blue Team' : 'Red Team';
+    finishRound(winnerTeam, `${winnerTeam} drained all enemy reinforcements.`);
+    return true;
+  }
+
+  return false;
+}
+
+function countNearbyPlayers(team: Exclude<ControlPointOwner, 'none'>, x: number, y: number, radius: number) {
+  return Array.from(state.players.values()).filter(
+    (player) => !player.observer && player.health > 0 && player.team === team && distance(player.x, player.y, x, y) <= radius,
+  ).length;
 }
 
 function updateBotInput(bot: PlayerState) {
@@ -1249,6 +1349,17 @@ function getTeammateAvoidanceTurn(bot: PlayerState) {
 }
 
 function getBotMovementTarget(bot: PlayerState): BotMovementTarget | undefined {
+  if (state.phase === 'running' && state.mode === 'control-points' && (bot.team === 'red' || bot.team === 'blue')) {
+    const team = bot.team as Exclude<TeamId, 'observer' | 'none'>;
+    const preferredPoints = state.controlPoints.filter((point) => point.owner !== team);
+    const targetPoint = (preferredPoints.length > 0 ? preferredPoints : state.controlPoints)
+      .slice()
+      .sort((left, right) => distance(bot.x, bot.y, left.x, left.y) - distance(bot.x, bot.y, right.x, right.y))[0];
+    if (targetPoint) {
+      return { x: targetPoint.x, y: targetPoint.y, preferredDistance: 30 };
+    }
+  }
+
   if (state.phase === 'running' && state.mode === 'protect-the-king' && (bot.team === 'red' || bot.team === 'blue')) {
     return getProtectKingBotMovementTarget(bot);
   }
@@ -1773,6 +1884,7 @@ function rotateTowards(current: number, target: number, maxStep: number) {
 function resetFlagsAndKings() {
   resetFlag(state.redFlag, state.map.redFlag.x, state.map.redFlag.y);
   resetFlag(state.blueFlag, state.map.blueFlag.x, state.map.blueFlag.y);
+  state.controlPoints = createControlPointsForMap(state.map);
   state.score = { red: 0, blue: 0 };
 }
 
@@ -1806,6 +1918,20 @@ function resetRoundState(assignForRound = state.phase === 'running') {
   if (assignForRound && state.mode === 'protect-the-king') {
     assignKingsForProtectMode();
   }
+  if (assignForRound && state.mode === 'control-points') {
+    state.score = {
+      red: state.modeSettings.controlPointsReinforcements,
+      blue: state.modeSettings.controlPointsReinforcements,
+    };
+  }
+}
+
+function createControlPointsForMap(map: ArenaMap) {
+  return map.controlPoints.map((point: ControlPointDefinition) => ({
+    ...point,
+    owner: 'none' as ControlPointOwner,
+    progress: 0,
+  }));
 }
 
 function finishRound(winner: string, reason: string) {

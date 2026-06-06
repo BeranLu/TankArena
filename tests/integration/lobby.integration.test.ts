@@ -20,6 +20,17 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeAngle(angle: number) {
+  let next = angle;
+  while (next > Math.PI) {
+    next -= Math.PI * 2;
+  }
+  while (next < -Math.PI) {
+    next += Math.PI * 2;
+  }
+  return next;
+}
+
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -178,6 +189,80 @@ async function waitForSnapshot(socket: TestSocket, predicate: (snapshot: GameSna
   throw new Error('Snapshot condition not met in time.');
 }
 
+async function syncLobbyList(socket: TestSocket) {
+  socket.emit('listLobbies');
+  return onceEvent<LobbySummary[]>(socket, 'lobbyList', 2500);
+}
+
+function createSnapshotTracker(socket: TestSocket) {
+  let latest: GameSnapshot | null = null;
+  const handler = (snapshot: GameSnapshot) => {
+    latest = snapshot;
+  };
+  socket.on('snapshot', handler);
+  return {
+    getLatest: () => latest,
+    dispose: () => socket.off('snapshot', handler),
+  };
+}
+
+function getSocketById(sockets: TestSocket[], socketId: string) {
+  const found = sockets.find((socket) => socket.id === socketId);
+  if (!found) {
+    throw new Error(`Socket not found: ${socketId}`);
+  }
+  return found;
+}
+
+async function moveSocketToPoint(socket: TestSocket, tracker: ReturnType<typeof createSnapshotTracker>, target: { x: number; y: number }, timeoutMs = 25000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const snapshot = tracker.getLatest();
+    if (!snapshot) {
+      await sleep(80);
+      continue;
+    }
+    const player = snapshot.players.find((entry) => entry.id === socket.id);
+    if (!player || player.observer) {
+      await sleep(80);
+      continue;
+    }
+
+    const dx = target.x - player.x;
+    const dy = target.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    const desired = Math.atan2(dy, dx);
+    const turnDelta = normalizeAngle(desired - player.bodyAngle);
+
+    socket.emit('input', {
+      up: dist > 30 && Math.abs(turnDelta) < 0.95,
+      down: false,
+      left: turnDelta < -0.12,
+      right: turnDelta > 0.12,
+      fire: false,
+      aimX: target.x,
+      aimY: target.y,
+    });
+
+    if (dist <= 45) {
+      socket.emit('input', {
+        up: false,
+        down: false,
+        left: false,
+        right: false,
+        fire: false,
+        aimX: target.x,
+        aimY: target.y,
+      });
+      return;
+    }
+
+    await sleep(80);
+  }
+
+  throw new Error('Failed to move socket to target point in time.');
+}
+
 afterEach(async () => {
   while (activeSockets.length > 0) {
     const socket = activeSockets.pop();
@@ -218,7 +303,7 @@ describe('Lobby integration', () => {
     await onceEvent(admin, 'joined');
 
     const guest = await connectClient(server.port);
-    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    await syncLobbyList(guest);
 
     const list = await waitForLobbyList(guest, (lobbies) => lobbies.some((lobby) => lobby.name === 'Kick Test'));
     const lobby = list.find((entry) => entry.name === 'Kick Test');
@@ -476,4 +561,156 @@ describe('Lobby integration', () => {
     const snapshotB = await waitForSnapshot(adminB, (next) => next.players.length >= 2);
     expect(snapshotB.players.some((p) => p.isBot)).toBe(false);
   });
+
+  it('control-points captures a point by staying near it', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+    admin.emit('createLobby', { name: 'CP Capture', playerName: 'Admin', clientKey: 'cp-capture-admin' });
+    await onceEvent(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await syncLobbyList(guest);
+    const lobbies = await waitForLobbyList(guest, (list) => list.some((lobby) => lobby.name === 'CP Capture'));
+    const lobby = lobbies.find((entry) => entry.name === 'CP Capture');
+    guest.emit('joinLobby', { lobbyId: lobby!.id, name: 'Guest', clientKey: 'cp-capture-guest' });
+    await onceEvent(guest, 'joined');
+
+    const tracker = createSnapshotTracker(admin);
+    admin.emit('setMode', 'control-points');
+    admin.emit('setModeSettings', { deathmatchTarget: 10, ctfTarget: 3, kingHealth: 500, controlPointsReinforcements: 100 });
+    admin.emit('startMatch');
+
+    const running = await waitForSnapshot(admin, (next) => next.phase === 'running', 9000);
+    const own = running.players.find((p) => p.id === admin.id)!;
+    const targetPoint = [...running.controlPoints].sort((a, b) => {
+      const distA = Math.hypot(a.x - own.x, a.y - own.y);
+      const distB = Math.hypot(b.x - own.x, b.y - own.y);
+      return distA - distB;
+    })[0];
+    const ownerTeam = own.team === 'red' ? 'red' : 'blue';
+
+    await moveSocketToPoint(admin, tracker, { x: targetPoint.x, y: targetPoint.y });
+    const captured = await waitForSnapshot(admin, (next) => next.controlPoints.some((point) => point.id === targetPoint.id && point.owner === ownerTeam), 8000);
+    expect(captured.controlPoints.find((point) => point.id === targetPoint.id)?.owner).toBe(ownerTeam);
+    tracker.dispose();
+  }, 60000);
+
+  it('control-points contested point does not progress meaningfully', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+    admin.emit('createLobby', { name: 'CP Contest', playerName: 'Admin', clientKey: 'cp-contest-admin' });
+    await onceEvent(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await syncLobbyList(guest);
+    const lobbies = await waitForLobbyList(guest, (list) => list.some((lobby) => lobby.name === 'CP Contest'));
+    const lobby = lobbies.find((entry) => entry.name === 'CP Contest');
+    guest.emit('joinLobby', { lobbyId: lobby!.id, name: 'Guest', clientKey: 'cp-contest-guest' });
+    await onceEvent(guest, 'joined');
+
+    const tracker = createSnapshotTracker(admin);
+    admin.emit('setMode', 'control-points');
+    admin.emit('setModeSettings', { deathmatchTarget: 10, ctfTarget: 3, kingHealth: 500, controlPointsReinforcements: 100 });
+    admin.emit('startMatch');
+
+    const running = await waitForSnapshot(admin, (next) => next.phase === 'running', 9000);
+    const center = running.controlPoints[1] ?? running.controlPoints[0];
+
+    await Promise.all([
+      moveSocketToPoint(admin, tracker, { x: center.x, y: center.y }),
+      moveSocketToPoint(guest, tracker, { x: center.x, y: center.y }),
+    ]);
+
+    const before = (tracker.getLatest()?.controlPoints.find((point) => point.id === center.id)?.progress) ?? 0;
+    await sleep(1800);
+    const after = (tracker.getLatest()?.controlPoints.find((point) => point.id === center.id)?.progress) ?? 0;
+    expect(Math.abs(after - before)).toBeLessThan(15);
+    tracker.dispose();
+  });
+
+  it('control-points bleeds reinforcements for team with fewer points', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+    admin.emit('createLobby', { name: 'CP Bleed', playerName: 'Admin', clientKey: 'cp-bleed-admin' });
+    await onceEvent(admin, 'joined');
+
+    const clients = [admin];
+    for (let index = 0; index < 3; index += 1) {
+      const client = await connectClient(server.port);
+      await syncLobbyList(client);
+      const lobbies = await waitForLobbyList(client, (list) => list.some((lobby) => lobby.name === 'CP Bleed'));
+      const lobby = lobbies.find((entry) => entry.name === 'CP Bleed');
+      client.emit('joinLobby', { lobbyId: lobby!.id, name: `P${index}`, clientKey: `cp-bleed-${index}` });
+      await onceEvent(client, 'joined');
+      clients.push(client);
+    }
+
+    const tracker = createSnapshotTracker(admin);
+    admin.emit('setMode', 'control-points');
+    admin.emit('setModeSettings', { deathmatchTarget: 10, ctfTarget: 3, kingHealth: 500, controlPointsReinforcements: 60 });
+    admin.emit('startMatch');
+
+    const running = await waitForSnapshot(admin, (next) => next.phase === 'running', 9000);
+    const byTeam = {
+      red: running.players.filter((p) => !p.observer && p.team === 'red').map((p) => getSocketById(clients, p.id)),
+      blue: running.players.filter((p) => !p.observer && p.team === 'blue').map((p) => getSocketById(clients, p.id)),
+    };
+    const winningTeam = byTeam.red.length >= byTeam.blue.length ? 'red' : 'blue';
+    const losingTeam = winningTeam === 'red' ? 'blue' : 'red';
+    const winners = winningTeam === 'red' ? byTeam.red : byTeam.blue;
+
+    await moveSocketToPoint(winners[0], tracker, { x: running.controlPoints[0].x, y: running.controlPoints[0].y });
+    await moveSocketToPoint(winners[1], tracker, { x: running.controlPoints[2].x, y: running.controlPoints[2].y });
+
+    await waitForSnapshot(admin, (next) => next.controlPoints.filter((p) => p.owner === winningTeam).length >= 2, 12000);
+    const before = (tracker.getLatest()?.score[losingTeam]) ?? 0;
+    await sleep(3500);
+    const after = (tracker.getLatest()?.score[losingTeam]) ?? before;
+    expect(after).toBeLessThan(before - 4);
+    tracker.dispose();
+  }, 60000);
+
+  it('control-points ends round when reinforcements reach zero', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+    admin.emit('createLobby', { name: 'CP Finish', playerName: 'Admin', clientKey: 'cp-finish-admin' });
+    await onceEvent(admin, 'joined');
+
+    const clients = [admin];
+    for (let index = 0; index < 3; index += 1) {
+      const client = await connectClient(server.port);
+      await syncLobbyList(client);
+      const lobbies = await waitForLobbyList(client, (list) => list.some((lobby) => lobby.name === 'CP Finish'));
+      const lobby = lobbies.find((entry) => entry.name === 'CP Finish');
+      client.emit('joinLobby', { lobbyId: lobby!.id, name: `F${index}`, clientKey: `cp-finish-${index}` });
+      await onceEvent(client, 'joined');
+      clients.push(client);
+    }
+
+    const tracker = createSnapshotTracker(admin);
+    admin.emit('setMode', 'control-points');
+    admin.emit('setModeSettings', { deathmatchTarget: 10, ctfTarget: 3, kingHealth: 500, controlPointsReinforcements: 50 });
+    admin.emit('startMatch');
+
+    const running = await waitForSnapshot(admin, (next) => next.phase === 'running', 9000);
+    const byTeam = {
+      red: running.players.filter((p) => !p.observer && p.team === 'red').map((p) => getSocketById(clients, p.id)),
+      blue: running.players.filter((p) => !p.observer && p.team === 'blue').map((p) => getSocketById(clients, p.id)),
+    };
+    const winningTeam = byTeam.red.length >= byTeam.blue.length ? 'red' : 'blue';
+    const winners = winningTeam === 'red' ? byTeam.red : byTeam.blue;
+
+    await moveSocketToPoint(winners[0], tracker, { x: running.controlPoints[0].x, y: running.controlPoints[0].y });
+    await moveSocketToPoint(winners[1], tracker, { x: running.controlPoints[2].x, y: running.controlPoints[2].y });
+    await waitForSnapshot(admin, (next) => next.controlPoints.filter((p) => p.owner === winningTeam).length >= 2, 12000);
+
+    const finished = await waitForSnapshot(admin, (next) => next.phase === 'finished' && next.roundResult?.mode === 'control-points', 45000);
+    expect(finished.roundResult?.mode).toBe('control-points');
+    expect(finished.roundResult?.winner).toBe(winningTeam === 'red' ? 'Red Team' : 'Blue Team');
+    tracker.dispose();
+  }, 60000);
 });
