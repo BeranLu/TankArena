@@ -107,10 +107,11 @@ export interface LobbySummary {
 
 export interface ClientToServerEvents {
   listLobbies: () => void;
-  createLobby: (payload: { name: string }) => void;
+  createLobby: (payload: { name: string; playerName: string }) => void;
   joinLobby: (payload: { lobbyId: string; name: string }) => void;
   leaveLobby: () => void;
   claimAdmin: (payload?: { password?: string }) => void;
+  transferAdmin: (payload: { playerId: string }) => void;
   addBot: () => void;
   removeBot: () => void;
   setReady: (ready: boolean) => void;

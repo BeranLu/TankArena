@@ -104,5 +104,6 @@ After DNS points to the VM IP and certificates are valid, players can join over 
 ## Notes
 
 - If `ADMIN_PASSWORD` is set, claiming admin requires that password in the Admin Console.
+- Set `VITE_SUPPORT_URL` (for example your Buy Me a Coffee page) to show a "Support the project" section in the lobby preparation screen.
 - Late joiners are added as observers while a match is running.
 - The current implementation is a playable foundation. Capture the flag and protect the king are wired as supported game modes and can be expanded next.

@@ -31,6 +31,8 @@ const DEFAULT_MODE_SETTINGS: ModeSettings = {
   kingHealth: 500,
 };
 
+const SUPPORT_URL = (((import.meta as { env?: { VITE_SUPPORT_URL?: string } }).env?.VITE_SUPPORT_URL)?.trim() ?? '');
+
 export default function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
@@ -46,6 +48,7 @@ export default function App() {
   const [adminMode, setAdminMode] = useState<GameMode>('deathmatch');
   const [adminMap, setAdminMap] = useState('cargo-yard');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminTargetPlayerId, setAdminTargetPlayerId] = useState('');
   const [adminSettings, setAdminSettings] = useState<ModeSettings>(DEFAULT_MODE_SETTINGS);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
@@ -178,6 +181,25 @@ export default function App() {
   const isFinished = snapshot?.phase === 'finished';
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
+  const transferablePlayers = useMemo(() => {
+    if (!snapshot) {
+      return [];
+    }
+    return snapshot.players.filter((player) => !player.isBot && player.id !== snapshot.adminId);
+  }, [snapshot]);
+
+  useEffect(() => {
+    if (transferablePlayers.length === 0) {
+      setAdminTargetPlayerId('');
+      return;
+    }
+    setAdminTargetPlayerId((current) => {
+      if (current && transferablePlayers.some((player) => player.id === current)) {
+        return current;
+      }
+      return transferablePlayers[0].id;
+    });
+  }, [transferablePlayers]);
 
   const join = () => {
     if (!selectedLobbyId) {
@@ -186,7 +208,7 @@ export default function App() {
     socket?.emit('joinLobby', { lobbyId: selectedLobbyId, name });
   };
   const createLobby = () => {
-    socket?.emit('createLobby', { name: newLobbyName });
+    socket?.emit('createLobby', { name: newLobbyName, playerName: name });
     setNewLobbyName('');
   };
   const leaveLobby = () => {
@@ -250,7 +272,49 @@ export default function App() {
 
       {announcement ? <div className="announcement">{announcement}</div> : null}
 
-      <main className="layout">
+      <section className="panel lobbyBrowserPanel">
+        <div className="panelHeader compact">
+          <h2>Lobby Selection</h2>
+          <button type="button" onClick={() => socket?.emit('listLobbies')}>Refresh list</button>
+        </div>
+        <div className="joinBox">
+          <label className="field">
+            <span>Call sign</span>
+            <input value={name} onChange={(event) => setName(event.target.value)} maxLength={20} />
+          </label>
+          <label className="field">
+            <span>Choose lobby</span>
+            <select value={selectedLobbyId} onChange={(event) => setSelectedLobbyId(event.target.value)}>
+              {lobbies.length === 0 ? <option value="">No lobbies available</option> : null}
+              {lobbies.map((lobby) => (
+                <option key={lobby.id} value={lobby.id}>
+                  {lobby.name} · {lobby.players} players · {lobby.bots} bots · {MODES[lobby.mode]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="controlsRow wrap">
+            <button type="button" onClick={join} disabled={!selectedLobbyId}>Join selected lobby</button>
+            <button type="button" onClick={leaveLobby} disabled={!joined}>Leave current lobby</button>
+          </div>
+          <label className="field">
+            <span>Create lobby</span>
+            <input value={newLobbyName} onChange={(event) => setNewLobbyName(event.target.value)} maxLength={28} placeholder="New lobby name" />
+          </label>
+          <button type="button" onClick={createLobby} disabled={!newLobbyName.trim()}>Create lobby</button>
+          {!joined && SUPPORT_URL ? (
+            <div className="supportBox">
+              <p className="supportTitle">Support the project</p>
+              <p className="supportText">If you enjoy Tank Arena, you can support development on Buy Me a Coffee.</p>
+              <a className="supportLink" href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">
+                Buy Me a Coffee
+              </a>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {joined ? <main className="layout">
         <section className="panel gamePanel">
           <div className="panelHeader">
             <div>
@@ -287,35 +351,6 @@ export default function App() {
                 </ul>
                 <p className="resultHint">Admin: click Stop to lobby, then Start for the next round.</p>
               </div>
-            </div>
-          ) : null}
-
-          {!joined ? (
-            <div className="joinBox">
-              <label className="field">
-                <span>Call sign</span>
-                <input value={name} onChange={(event) => setName(event.target.value)} maxLength={20} />
-              </label>
-              <label className="field">
-                <span>Choose lobby</span>
-                <select value={selectedLobbyId} onChange={(event) => setSelectedLobbyId(event.target.value)}>
-                  {lobbies.length === 0 ? <option value="">No lobbies available</option> : null}
-                  {lobbies.map((lobby) => (
-                    <option key={lobby.id} value={lobby.id}>
-                      {lobby.name} · {lobby.players} players · {lobby.bots} bots · {MODES[lobby.mode]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="controlsRow wrap">
-                <button type="button" onClick={join} disabled={!selectedLobbyId}>Join selected lobby</button>
-                <button type="button" onClick={() => socket?.emit('listLobbies')}>Refresh list</button>
-              </div>
-              <label className="field">
-                <span>Create lobby</span>
-                <input value={newLobbyName} onChange={(event) => setNewLobbyName(event.target.value)} maxLength={28} placeholder="New lobby name" />
-              </label>
-              <button type="button" onClick={createLobby}>Create lobby</button>
             </div>
           ) : null}
 
@@ -364,6 +399,15 @@ export default function App() {
                 onChange={(event) => setAdminPassword(event.target.value)}
                 placeholder="Required when ADMIN_PASSWORD is set"
               />
+            </label>
+            <label className="field">
+              <span>Transfer admin to</span>
+              <select value={adminTargetPlayerId} onChange={(event) => setAdminTargetPlayerId(event.target.value)}>
+                {transferablePlayers.length === 0 ? <option value="">No eligible players</option> : null}
+                {transferablePlayers.map((player) => (
+                  <option key={player.id} value={player.id}>{player.name}</option>
+                ))}
+              </select>
             </label>
             <label className="field">
               <span>Game type</span>
@@ -435,6 +479,7 @@ export default function App() {
               <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isAdmin || !isLobby}>Apply mode</button>
               <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isAdmin || !isLobby}>Apply map</button>
               <button type="button" onClick={applyModeSettings} disabled={!isAdmin || !isLobby}>Apply settings</button>
+              <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!isAdmin || !adminTargetPlayerId}>Pass admin</button>
               <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isAdmin || !isLobby}>+ Bot</button>
               <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isAdmin || !isLobby}>- Bot</button>
               <button type="button" onClick={startMatch} disabled={!isAdmin || !isLobby}>Start</button>
@@ -444,7 +489,7 @@ export default function App() {
             <p className="adminTip">To change map or game type during a match: click Stop to lobby, apply mode/map, then Start.</p>
           </section>
         </aside>
-      </main>
+      </main> : null}
     </div>
   );
 }

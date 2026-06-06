@@ -3,7 +3,7 @@ import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import type {
   ArenaMap,
   ClientToServerEvents,
@@ -161,13 +161,14 @@ io.on('connection', (socket) => {
     socket.emit('lobbyList', buildLobbyList());
   });
 
-  socket.on('createLobby', ({ name }: { name: string }) => {
+  socket.on('createLobby', ({ name, playerName }: { name: string; playerName: string }) => {
     if (lobbyRuntimes.size >= MAX_LOBBIES) {
       socket.emit('message', `Lobby limit reached (${MAX_LOBBIES}).`);
       return;
     }
     const runtime = createLobbyRuntime(nextLobbyId(), sanitizeLobbyName(name));
-    socket.emit('message', `Lobby ${runtime.name} created.`);
+    joinSocketToLobby(socket, runtime, playerName, true);
+    socket.emit('message', `Lobby ${runtime.name} created. You are the admin.`);
     emitLobbyList();
   });
 
@@ -195,50 +196,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    leaveLobby(socket.id, '');
-    socket.join(lobbyRoom(lobbyId));
-    socketLobbyMap.set(socket.id, lobbyId);
-
-    runInLobby(runtime, () => {
-      const observer = state.phase !== 'lobby';
-      const team: TeamId = observer ? 'observer' : 'none';
-      const spawnSlot = observer ? 0 : teamPlayerCount('none');
-      const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
-      const player: PlayerState = {
-        id: socket.id,
-        socketId: socket.id,
-        name: sanitizeName(name),
-        isBot: false,
-        team,
-        x: spawn.x,
-        y: spawn.y,
-        bodyAngle: 0,
-        turretAngle: 0,
-        health: BASE_HEALTH,
-        maxHealth: BASE_HEALTH,
-        score: 0,
-        ready: false,
-        observer,
-        admin: state.adminId === socket.id,
-        carryingFlag: false,
-        isKing: false,
-        shielded: false,
-        input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
-        respawnAt: 0,
-        shootCooldown: 0,
-        shieldUntil: 0,
-      };
-
-      state.players.set(socket.id, player);
-      if (!state.adminId) {
-        state.adminId = socket.id;
-        player.admin = true;
-      }
-
-      socket.emit('joined', { observer, admin: player.admin, team, lobbyId: runtime.id, lobbyName: runtime.name });
-      broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
-      emitSnapshot();
-    });
+    joinSocketToLobby(socket, runtime, name, false);
 
     emitLobbyList();
   });
@@ -266,6 +224,27 @@ io.on('connection', (socket) => {
       state.adminId = socket.id;
       refreshAdminFlags();
       broadcast('Admin console claimed.');
+      emitSnapshot();
+    });
+  });
+
+  socket.on('transferAdmin', ({ playerId }: { playerId: string }) => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
+      return;
+    }
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id)) {
+        return;
+      }
+      const target = state.players.get(playerId);
+      if (!target || target.isBot) {
+        socket.emit('message', 'Selected player is not available for admin transfer.');
+        return;
+      }
+      state.adminId = target.id;
+      refreshAdminFlags();
+      broadcast(`Admin transferred to ${target.name}.`);
       emitSnapshot();
     });
   });
@@ -552,6 +531,53 @@ function buildLobbyList(): LobbySummary[] {
 
 function emitLobbyList() {
   io.emit('lobbyList', buildLobbyList());
+}
+
+function joinSocketToLobby(socket: Socket<ClientToServerEvents, ServerToClientEvents>, runtime: LobbyRuntime, name: string, forceAdmin: boolean) {
+  leaveLobby(socket.id, '');
+  socket.join(lobbyRoom(runtime.id));
+  socketLobbyMap.set(socket.id, runtime.id);
+
+  runInLobby(runtime, () => {
+    const observer = state.phase !== 'lobby';
+    const team: TeamId = observer ? 'observer' : 'none';
+    const spawnSlot = observer ? 0 : teamPlayerCount('none');
+    const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
+    const player: PlayerState = {
+      id: socket.id,
+      socketId: socket.id,
+      name: sanitizeName(name),
+      isBot: false,
+      team,
+      x: spawn.x,
+      y: spawn.y,
+      bodyAngle: 0,
+      turretAngle: 0,
+      health: BASE_HEALTH,
+      maxHealth: BASE_HEALTH,
+      score: 0,
+      ready: false,
+      observer,
+      admin: false,
+      carryingFlag: false,
+      isKing: false,
+      shielded: false,
+      input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
+      respawnAt: 0,
+      shootCooldown: 0,
+      shieldUntil: 0,
+    };
+
+    state.players.set(socket.id, player);
+    if (forceAdmin || !state.adminId) {
+      state.adminId = socket.id;
+    }
+    refreshAdminFlags();
+
+    socket.emit('joined', { observer, admin: player.id === state.adminId, team, lobbyId: runtime.id, lobbyName: runtime.name });
+    broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
+    emitSnapshot();
+  });
 }
 
 function leaveLobby(socketId: string, reason: string) {
