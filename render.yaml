@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: tank-arena
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 24.16.0
+      - key: ADMIN_PASSWORD
+        sync: false

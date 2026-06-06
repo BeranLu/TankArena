@@ -46,6 +46,61 @@ The Nginx config is in `deploy/nginx/nginx.conf` and proxies both HTTP and WebSo
 	- `npx pm2 start ecosystem.config.cjs`
 4. Put Nginx/Caddy in front for HTTPS.
 
+### Option 3: Render (fastest hosted setup)
+
+Render can deploy directly from this repository using `render.yaml`.
+
+1. Push latest code to GitHub.
+2. In Render, click `New +` -> `Blueprint`.
+3. Connect your GitHub repo and select this project.
+4. In the generated service, set `ADMIN_PASSWORD` to a strong value.
+5. Deploy.
+
+Render provides HTTPS automatically and assigns a public URL.
+
+Useful notes for Render:
+
+- Free plan instances can sleep when idle.
+- The first player after idle may wait for cold start.
+- WebSockets (Socket.IO) are supported on Render web services.
+
+### Option 4: Oracle Cloud Always Free VM (recommended for always-on free hosting)
+
+This path gives you an always-on Linux VM with full control and no sleep mode.
+
+1. Create an Oracle Cloud VM (Ubuntu 24.04 recommended).
+2. Reserve a public IP and attach it to the VM.
+3. In Oracle Cloud networking, allow inbound TCP ports `22`, `80`, and `443`.
+4. SSH to the VM and install Docker + Compose plugin:
+	- `sudo apt update`
+	- `sudo apt install -y ca-certificates curl gnupg`
+	- `sudo install -m 0755 -d /etc/apt/keyrings`
+	- `curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg`
+	- `sudo chmod a+r /etc/apt/keyrings/docker.gpg`
+	- `echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null`
+	- `sudo apt update`
+	- `sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`
+	- `sudo usermod -aG docker $USER`
+	- Reconnect SSH so group membership refreshes.
+5. Install Git and clone this repository:
+	- `sudo apt install -y git`
+	- `git clone https://github.com/BeranLu/TankArena.git`
+	- `cd TankArena`
+6. Configure application environment:
+	- `cp .env.example .env`
+	- Edit `.env` and set a strong `ADMIN_PASSWORD`.
+7. Configure TLS certificates (required by current Nginx config):
+	- Put certificate chain at `certs/fullchain.pem`.
+	- Put private key at `certs/privkey.pem`.
+8. Start the stack:
+	- `docker compose up -d --build`
+9. Check service health:
+	- `docker compose ps`
+	- `docker compose logs -f app`
+	- `docker compose logs -f nginx`
+
+After DNS points to the VM IP and certificates are valid, players can join over HTTPS/WSS.
+
 ## Notes
 
 - If `ADMIN_PASSWORD` is set, claiming admin requires that password in the Admin Console.
