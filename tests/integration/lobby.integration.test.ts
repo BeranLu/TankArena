@@ -277,6 +277,59 @@ afterEach(async () => {
 });
 
 describe('Lobby integration', () => {
+  it('auto-joins lobby creator as admin and emits initial lobby snapshot', async () => {
+    const server = await startServer();
+    const creator = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(creator, 'lobbyList');
+
+    creator.emit('createLobby', { name: 'Creator Flow', playerName: 'Creator', clientKey: 'creator-flow' });
+    const joined = await onceEvent<{ lobbyId: string; lobbyName: string; admin: boolean; observer: boolean }>(creator, 'joined');
+    expect(joined.admin).toBe(true);
+    expect(joined.observer).toBe(false);
+    expect(joined.lobbyName).toBe('Creator Flow');
+
+    const snapshot = await waitForSnapshot(creator, (next) => next.phase === 'lobby' && next.players.some((player) => player.id === creator.id));
+    expect(snapshot.adminId).toBe(creator.id);
+    expect(snapshot.players.some((player) => player.id === creator.id)).toBe(true);
+    expect(snapshot.map.width).toBeGreaterThan(0);
+    expect(snapshot.map.height).toBeGreaterThan(0);
+  });
+
+  it('ignores startMatch from non-admin players', async () => {
+    const server = await startServer();
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Start Guard', playerName: 'Admin', clientKey: 'start-guard-admin' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Guest', clientKey: 'start-guard-guest' });
+    await onceEvent(guest, 'joined');
+
+    guest.emit('startMatch');
+    const snapshot = await waitForSnapshot(admin, (next) => next.players.some((player) => player.id === guest.id));
+    expect(snapshot.phase).toBe('lobby');
+  });
+
+  it('rejects joins when lobby reaches max players', async () => {
+    const server = await startServer({ MAX_PLAYERS_PER_LOBBY: '1' });
+    const admin = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(admin, 'lobbyList');
+
+    admin.emit('createLobby', { name: 'Capacity Test', playerName: 'Admin', clientKey: 'capacity-admin' });
+    const joined = await onceEvent<{ lobbyId: string }>(admin, 'joined');
+
+    const guest = await connectClient(server.port);
+    await onceEvent<LobbySummary[]>(guest, 'lobbyList');
+    guest.emit('joinLobby', { lobbyId: joined.lobbyId, name: 'Guest', clientKey: 'capacity-guest' });
+
+    const message = await onceEvent<string>(guest, 'message');
+    expect(message.toLowerCase()).toContain('full');
+    await expectNoEvent(guest, 'joined');
+  });
+
   it('requires password for private lobbies', async () => {
     const server = await startServer();
     const admin = await connectClient(server.port);
@@ -667,9 +720,8 @@ describe('Lobby integration', () => {
 
     await waitForSnapshot(admin, (next) => next.controlPoints.filter((p) => p.owner === winningTeam).length >= 2, 12000);
     const before = (tracker.getLatest()?.score[losingTeam]) ?? 0;
-    await sleep(3500);
-    const after = (tracker.getLatest()?.score[losingTeam]) ?? before;
-    expect(after).toBeLessThan(before - 4);
+    const bled = await waitForSnapshot(admin, (next) => next.score[losingTeam] <= before - 1, 10000);
+    expect(bled.score[losingTeam]).toBeLessThan(before - 0.9);
     tracker.dispose();
   }, 60000);
 

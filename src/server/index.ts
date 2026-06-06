@@ -1024,6 +1024,10 @@ function buildSnapshot(): GameSnapshot {
   const countdownRemainingMs = state.phase === 'countdown' && state.countdownEndsAt
     ? Math.max(0, state.countdownEndsAt - Date.now())
     : null;
+  const displayScore = {
+    red: Math.round(state.score.red * 10) / 10,
+    blue: Math.round(state.score.blue * 10) / 10,
+  };
   return {
     phase: state.phase,
     countdownRemainingMs,
@@ -1059,7 +1063,7 @@ function buildSnapshot(): GameSnapshot {
     controlPoints: state.controlPoints.map((point) => ({ ...point })),
     flagsHome: { red: state.redFlag.carriedBy === null && near(state.redFlag.x, state.redFlag.homeX) && near(state.redFlag.y, state.redFlag.homeY), blue: state.blueFlag.carriedBy === null && near(state.blueFlag.x, state.blueFlag.homeX) && near(state.blueFlag.y, state.blueFlag.homeY) },
     kingHealth: { red: getTeamKingHealth('red'), blue: getTeamKingHealth('blue') },
-    score: state.score,
+    score: displayScore,
     activePlayers: Array.from(state.players.values()).filter((player) => !player.observer).length,
     connectedClients: Array.from(state.players.values()).filter((player) => !player.isBot).length,
     adminId: state.adminId,
@@ -1210,7 +1214,7 @@ function updateControlPoints(deltaSeconds: number) {
   const diff = Math.abs(redOwned - blueOwned);
   const loser: Exclude<ControlPointOwner, 'none'> = redOwned > blueOwned ? 'blue' : 'red';
   const nextReinforcements = Math.max(0, state.score[loser] - diff * CONTROL_POINT_BLEED_PER_POINT_PER_SECOND * deltaSeconds);
-  state.score[loser] = Math.round(nextReinforcements * 10) / 10;
+  state.score[loser] = nextReinforcements;
   if (state.score[loser] <= 0) {
     const winnerTeam = loser === 'red' ? 'Blue Team' : 'Red Team';
     finishRound(winnerTeam, `${winnerTeam} drained all enemy reinforcements.`);
