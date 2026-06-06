@@ -12,10 +12,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "redis": "^6.0.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },

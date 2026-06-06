@@ -3,6 +3,8 @@ import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient } from 'redis';
 import { Server, Socket } from 'socket.io';
 import type {
   ArenaMap,
@@ -97,6 +99,7 @@ const MAX_BOTS_PER_LOBBY = parseLimit(process.env.MAX_BOTS_PER_LOBBY, 6);
 const MAX_TOTAL_PLAYERS = parseLimit(process.env.MAX_TOTAL_PLAYERS, 40);
 const EMPTY_LOBBY_GRACE_MS = parseLimit(process.env.EMPTY_LOBBY_GRACE_MS, 45000);
 const RECONNECT_GRACE_MS = parseLimit(process.env.RECONNECT_GRACE_MS, 25000);
+const REDIS_URL = (process.env.REDIS_URL ?? '').trim();
 const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
@@ -1814,6 +1817,29 @@ if (fs.existsSync(productionClient)) {
   });
 }
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Tank Arena server listening on http://0.0.0.0:${PORT}`);
-});
+async function configureSocketAdapter() {
+  if (!REDIS_URL) {
+    return;
+  }
+
+  const pubClient = createClient({ url: REDIS_URL });
+  const subClient = pubClient.duplicate();
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log(`Socket.IO Redis adapter enabled at ${REDIS_URL}`);
+}
+
+async function startServer() {
+  try {
+    await configureSocketAdapter();
+  } catch (error) {
+    console.error('Failed to configure Socket.IO adapter.', error);
+    process.exit(1);
+  }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Tank Arena server listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+void startServer();
