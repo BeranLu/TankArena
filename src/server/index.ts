@@ -599,18 +599,21 @@ function updateBotInput(bot: PlayerState) {
     return;
   }
 
-  const target = pickBotTarget(bot);
-  if (!target) {
+  const movementTarget = getBotMovementTarget(bot);
+  const combatTarget = pickBotTarget(bot);
+  if (!movementTarget && !combatTarget) {
     bot.input = { ...bot.input, up: false, down: false, left: false, right: false, fire: false, aimX: bot.x + Math.cos(bot.bodyAngle) * 120, aimY: bot.y + Math.sin(bot.bodyAngle) * 120 };
     return;
   }
 
-  const aimX = target.x;
-  const aimY = target.y;
-  const targetAngle = Math.atan2(target.y - bot.y, target.x - bot.x);
-  const distanceToTarget = distance(bot.x, bot.y, target.x, target.y);
+  const moveTargetX = movementTarget?.x ?? combatTarget?.x ?? bot.x;
+  const moveTargetY = movementTarget?.y ?? combatTarget?.y ?? bot.y;
+  const aimX = combatTarget?.x ?? moveTargetX;
+  const aimY = combatTarget?.y ?? moveTargetY;
+  const targetAngle = Math.atan2(moveTargetY - bot.y, moveTargetX - bot.x);
+  const distanceToTarget = distance(bot.x, bot.y, moveTargetX, moveTargetY);
   const hullDelta = wrapAngle(targetAngle - bot.bodyAngle);
-  const turretDelta = wrapAngle(targetAngle - bot.turretAngle);
+  const turretDelta = wrapAngle(Math.atan2(aimY - bot.y, aimX - bot.x) - bot.turretAngle);
 
   const forwardProbeDistance = Math.max(28, Math.min(90, distanceToTarget * 0.35));
   const frontBlocked = isBlockedAhead(bot, bot.bodyAngle, forwardProbeDistance);
@@ -622,9 +625,59 @@ function updateBotInput(bot: PlayerState) {
   const down = distanceToTarget < 70;
   const left = frontBlocked ? !steerToRight : hullDelta < -0.1;
   const right = frontBlocked ? steerToRight : hullDelta > 0.1;
-  const fire = Math.abs(turretDelta) < 0.2 && distanceToTarget < 560;
+  const combatDistance = combatTarget ? distance(bot.x, bot.y, combatTarget.x, combatTarget.y) : Number.POSITIVE_INFINITY;
+  const fire = Boolean(combatTarget) && Math.abs(turretDelta) < 0.2 && combatDistance < 560;
 
   bot.input = { up, down, left, right, fire, aimX, aimY };
+}
+
+function getBotMovementTarget(bot: PlayerState) {
+  if (state.phase !== 'running' || state.mode !== 'capture-the-flag' || (bot.team !== 'red' && bot.team !== 'blue')) {
+    return pickBotTarget(bot);
+  }
+
+  const team = bot.team as Exclude<TeamId, 'observer' | 'none'>;
+  const ownBase = team === 'red' ? state.map.redBase : state.map.blueBase;
+  const ownFlag = team === 'red' ? state.redFlag : state.blueFlag;
+  const enemyFlag = team === 'red' ? state.blueFlag : state.redFlag;
+  const defender = isDefenderBot(bot);
+
+  if (bot.carryingFlag) {
+    return ownBase;
+  }
+
+  if (defender) {
+    if (ownFlag.carriedBy) {
+      const carrier = state.players.get(ownFlag.carriedBy);
+      if (carrier && !carrier.observer && carrier.health > 0) {
+        return { x: carrier.x, y: carrier.y };
+      }
+    }
+    return {
+      x: ownBase.x + (team === 'red' ? 60 : -60),
+      y: ownBase.y,
+    };
+  }
+
+  if (enemyFlag.carriedBy) {
+    if (enemyFlag.carriedBy === bot.id) {
+      return ownBase;
+    }
+    const allyCarrier = state.players.get(enemyFlag.carriedBy);
+    if (allyCarrier && allyCarrier.team === team && allyCarrier.health > 0) {
+      return { x: allyCarrier.x, y: allyCarrier.y };
+    }
+  }
+
+  return { x: enemyFlag.x, y: enemyFlag.y };
+}
+
+function isDefenderBot(bot: PlayerState) {
+  const idNumber = Number.parseInt(bot.id.replace('bot-', ''), 10);
+  if (Number.isFinite(idNumber)) {
+    return idNumber % 2 === 0;
+  }
+  return bot.name.length % 2 === 0;
 }
 
 function isBlockedAhead(bot: PlayerState, heading: number, distanceAhead: number) {
