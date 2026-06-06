@@ -853,11 +853,34 @@ function isPathBlocked(ax: number, ay: number, bx: number, by: number, radius: n
 }
 
 function isDefenderBot(bot: PlayerState) {
+  if (bot.team !== 'red' && bot.team !== 'blue') {
+    return false;
+  }
+
+  const teamBots = Array.from(state.players.values())
+    .filter((player) => player.isBot && !player.observer && player.team === bot.team)
+    .sort((left, right) => getBotSortKey(left) - getBotSortKey(right));
+
+  if (teamBots.length === 0) {
+    return false;
+  }
+
+  // Keep approximately 70/30 attacker/defender split per team.
+  const defenderCount = Math.floor(teamBots.length * 0.3);
+  if (defenderCount <= 0) {
+    return false;
+  }
+
+  const defenderIds = new Set(teamBots.slice(0, defenderCount).map((player) => player.id));
+  return defenderIds.has(bot.id);
+}
+
+function getBotSortKey(bot: PlayerState) {
   const idNumber = Number.parseInt(bot.id.replace('bot-', ''), 10);
   if (Number.isFinite(idNumber)) {
-    return idNumber % 2 === 0;
+    return idNumber;
   }
-  return bot.name.length % 2 === 0;
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function isBlockedAhead(bot: PlayerState, heading: number, distanceAhead: number) {
