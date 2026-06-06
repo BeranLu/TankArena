@@ -10,6 +10,7 @@ import type {
   GameMode,
   GameSnapshot,
   MatchPhase,
+  ModeSettings,
   PlayerInput,
   PlayerSnapshot,
   ProjectileSnapshot,
@@ -38,14 +39,15 @@ const TICK_MS = 1000 / 60;
 const PLAYER_RADIUS = 14;
 const BULLET_RADIUS = 4;
 const BASE_HEALTH = 100;
-const KING_HEALTH = 500;
 const KING_RADIUS_MULTIPLIER = 1.2;
 const PLAYER_SPEED = 170;
 const REVERSE_SPEED_MULTIPLIER = 0.65;
 const HULL_TURN_SPEED = 2.5;
 const TURRET_TURN_SPEED = 3.4;
 const BULLET_SPEED = 460;
-const CTF_WIN_SCORE = 3;
+const DEFAULT_CTF_WIN_SCORE = 3;
+const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
+const DEFAULT_KING_HEALTH = 500;
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? '').trim();
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
@@ -120,6 +122,11 @@ const state = {
   redFlag: { x: MAPS['cargo-yard'].redFlag.x, y: MAPS['cargo-yard'].redFlag.y, homeX: MAPS['cargo-yard'].redFlag.x, homeY: MAPS['cargo-yard'].redFlag.y, carriedBy: null } satisfies FlagState,
   blueFlag: { x: MAPS['cargo-yard'].blueFlag.x, y: MAPS['cargo-yard'].blueFlag.y, homeX: MAPS['cargo-yard'].blueFlag.x, homeY: MAPS['cargo-yard'].blueFlag.y, carriedBy: null } satisfies FlagState,
   score: { red: 0, blue: 0 },
+  modeSettings: {
+    deathmatchTarget: DEFAULT_TEAM_DEATHMATCH_WIN_SCORE,
+    ctfTarget: DEFAULT_CTF_WIN_SCORE,
+    kingHealth: DEFAULT_KING_HEALTH,
+  } satisfies ModeSettings,
   adminId: null as string | null,
   message: 'Waiting for players to join the lobby.',
   roundResult: null as RoundResult | null,
@@ -205,6 +212,17 @@ io.on('connection', (socket) => {
       return;
     }
     state.mode = mode;
+    emitSnapshot();
+  });
+
+  socket.on('setModeSettings', (settings: ModeSettings) => {
+    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+      return;
+    }
+    if (!settings) {
+      return;
+    }
+    state.modeSettings = sanitizeModeSettings(settings);
     emitSnapshot();
   });
 
@@ -389,6 +407,7 @@ function buildSnapshot(): GameSnapshot {
   return {
     phase: state.phase,
     mode: state.mode,
+    modeSettings: state.modeSettings,
     map: state.map,
     players: Array.from(state.players.values()).map((player) => ({
       id: player.id,
@@ -423,6 +442,19 @@ function buildSnapshot(): GameSnapshot {
     message: state.message,
     roundResult: state.roundResult,
   };
+}
+
+function sanitizeModeSettings(settings: ModeSettings): ModeSettings {
+  return {
+    deathmatchTarget: clampInt(settings.deathmatchTarget, 1, 200),
+    ctfTarget: clampInt(settings.ctfTarget, 1, 20),
+    kingHealth: clampInt(settings.kingHealth, BASE_HEALTH, 5000),
+  };
+}
+
+function clampInt(value: number, min: number, max: number) {
+  const safe = Number.isFinite(value) ? Math.round(value) : min;
+  return Math.max(min, Math.min(max, safe));
 }
 
 function near(value: number, target: number) {
@@ -604,12 +636,14 @@ function updateProjectiles(deltaSeconds: number) {
           const owner = state.players.get(projectile.ownerId);
           if (owner) {
             owner.score += 1;
-          }
-          if (state.phase === 'running' && state.mode === 'deathmatch') {
-            const winner = Array.from(state.players.values()).find((entry) => !entry.observer && entry.score >= 10);
-            if (winner) {
-              finishRound(winner.name, `${winner.name} reached 10 frags.`);
-              return;
+            if (state.phase === 'running' && state.mode === 'deathmatch' && (owner.team === 'red' || owner.team === 'blue')) {
+              state.score[owner.team] += 1;
+              const target = state.modeSettings.deathmatchTarget;
+              if (state.score[owner.team] >= target) {
+                const winnerTeam = owner.team === 'red' ? 'Red Team' : 'Blue Team';
+                finishRound(winnerTeam, `${winnerTeam} reached ${target} points.`);
+                return;
+              }
             }
           }
         }
@@ -644,9 +678,10 @@ function updateFlags(player: PlayerState) {
     state.score[team] += 1;
     resetFlag(team === 'red' ? state.blueFlag : state.redFlag, team === 'red' ? state.blueFlag.homeX : state.redFlag.homeX, team === 'red' ? state.blueFlag.homeY : state.redFlag.homeY);
     state.message = `${team === 'red' ? 'Red' : 'Blue'} scored a capture.`;
-    if (state.score[team] >= CTF_WIN_SCORE) {
+    const ctfTarget = state.modeSettings.ctfTarget;
+    if (state.score[team] >= ctfTarget) {
       const winnerTeam = team === 'red' ? 'Red Team' : 'Blue Team';
-      finishRound(winnerTeam, `${winnerTeam} captured ${CTF_WIN_SCORE} flags.`);
+      finishRound(winnerTeam, `${winnerTeam} captured ${ctfTarget} flags.`);
       return true;
     }
   }
@@ -792,13 +827,13 @@ function assignKingsForProtectMode() {
 
   if (redKing) {
     redKing.isKing = true;
-    redKing.maxHealth = KING_HEALTH;
-    redKing.health = KING_HEALTH;
+    redKing.maxHealth = state.modeSettings.kingHealth;
+    redKing.health = state.modeSettings.kingHealth;
   }
   if (blueKing) {
     blueKing.isKing = true;
-    blueKing.maxHealth = KING_HEALTH;
-    blueKing.health = KING_HEALTH;
+    blueKing.maxHealth = state.modeSettings.kingHealth;
+    blueKing.health = state.modeSettings.kingHealth;
   }
 
   if (redKing && blueKing) {

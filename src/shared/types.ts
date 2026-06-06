@@ -2,6 +2,12 @@ export type GameMode = 'deathmatch' | 'capture-the-flag' | 'protect-the-king';
 export type MatchPhase = 'lobby' | 'running' | 'paused' | 'finished';
 export type TeamId = 'red' | 'blue' | 'none' | 'observer';
 
+export interface ModeSettings {
+  deathmatchTarget: number;
+  ctfTarget: number;
+  kingHealth: number;
+}
+
 export interface RoundResultEntry {
   id: string;
   name: string;
@@ -73,6 +79,7 @@ export interface ProjectileSnapshot {
 export interface GameSnapshot {
   phase: MatchPhase;
   mode: GameMode;
+  modeSettings: ModeSettings;
   map: ArenaMap;
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
@@ -92,6 +99,7 @@ export interface ClientToServerEvents {
   setReady: (ready: boolean) => void;
   setMap: (mapId: string) => void;
   setMode: (mode: GameMode) => void;
+  setModeSettings: (settings: ModeSettings) => void;
   startMatch: () => void;
   togglePause: () => void;
   resetLobby: () => void;

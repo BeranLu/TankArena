@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, GameMode, GameSnapshot, PlayerInput, ServerToClientEvents, TeamId } from '../shared/types';
+import type { ClientToServerEvents, GameMode, GameSnapshot, ModeSettings, PlayerInput, ServerToClientEvents, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
-  deathmatch: 'Deathmatch',
+  deathmatch: 'Team Deathmatch',
   'capture-the-flag': 'Capture the Flag',
   'protect-the-king': 'Protect the King',
 };
@@ -25,6 +25,12 @@ const DEFAULT_INPUT: PlayerInput = {
   aimY: 0,
 };
 
+const DEFAULT_MODE_SETTINGS: ModeSettings = {
+  deathmatchTarget: 10,
+  ctfTarget: 3,
+  kingHealth: 500,
+};
+
 export default function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
@@ -36,6 +42,8 @@ export default function App() {
   const [adminMode, setAdminMode] = useState<GameMode>('deathmatch');
   const [adminMap, setAdminMap] = useState('cargo-yard');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminSettings, setAdminSettings] = useState<ModeSettings>(DEFAULT_MODE_SETTINGS);
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -60,6 +68,14 @@ export default function App() {
       nextSocket.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (!snapshot || settingsHydrated) {
+      return;
+    }
+    setAdminSettings(snapshot.modeSettings);
+    setSettingsHydrated(true);
+  }, [snapshot, settingsHydrated]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -146,7 +162,6 @@ export default function App() {
   const isFinished = snapshot?.phase === 'finished';
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
-  const deathmatchLeader = sortedPlayers.find((player) => !player.observer);
 
   const join = () => socket?.emit('join', { name });
   const claimAdmin = () => socket?.emit('claimAdmin', { password: adminPassword });
@@ -154,6 +169,21 @@ export default function App() {
   const startMatch = () => socket?.emit('startMatch');
   const togglePause = () => socket?.emit('togglePause');
   const resetLobby = () => socket?.emit('resetLobby');
+  const applyModeSettings = () => socket?.emit('setModeSettings', adminSettings);
+
+  const activeTargetLabel = isDeathmatch
+    ? `Target ${snapshot?.modeSettings.deathmatchTarget ?? DEFAULT_MODE_SETTINGS.deathmatchTarget}`
+    : snapshot?.mode === 'capture-the-flag'
+      ? `Target ${snapshot?.modeSettings.ctfTarget ?? DEFAULT_MODE_SETTINGS.ctfTarget}`
+      : `King HP ${snapshot?.modeSettings.kingHealth ?? DEFAULT_MODE_SETTINGS.kingHealth}`;
+
+  const roundObjectiveLabel = snapshot?.roundResult
+    ? snapshot.roundResult.mode === 'deathmatch'
+      ? `Team Deathmatch target: ${snapshot.modeSettings.deathmatchTarget} points`
+      : snapshot.roundResult.mode === 'capture-the-flag'
+        ? `Capture the Flag target: ${snapshot.modeSettings.ctfTarget} captures`
+        : `Protect the King setting: ${snapshot.modeSettings.kingHealth} king HP`
+    : '';
 
   function pushInput() {
     if (!socket || !joined || observer) {
@@ -211,6 +241,7 @@ export default function App() {
                 <h3>Round Over</h3>
                 <p className="resultWinner">Winner: {snapshot.roundResult.winner}</p>
                 <p className="resultReason">{snapshot.roundResult.reason}</p>
+                <p className="resultReason">{roundObjectiveLabel}</p>
                 <ul className="resultList">
                   {snapshot.roundResult.entries.map((entry, index) => (
                     <li key={entry.id}>
@@ -249,8 +280,9 @@ export default function App() {
             <div className="statsGrid">
               <div><span>Players</span><strong>{snapshot?.activePlayers ?? 0}</strong></div>
               <div><span>Clients</span><strong>{snapshot?.connectedClients ?? 0}</strong></div>
-              <div><span>{isDeathmatch ? 'Leader' : 'Red'}</span><strong>{isDeathmatch ? `${deathmatchLeader?.name ?? '-'} (${deathmatchLeader?.score ?? 0})` : snapshot?.score.red ?? 0}</strong></div>
-              <div><span>{isDeathmatch ? 'Target' : 'Blue'}</span><strong>{isDeathmatch ? '10 frags' : snapshot?.score.blue ?? 0}</strong></div>
+              <div><span>Red</span><strong>{snapshot?.score.red ?? 0}</strong></div>
+              <div><span>Blue</span><strong>{snapshot?.score.blue ?? 0}</strong></div>
+              <div><span>Objective</span><strong>{activeTargetLabel}</strong></div>
             </div>
             <ul className="playerList">
               {sortedPlayers.map((player) => (
@@ -280,7 +312,7 @@ export default function App() {
             <label className="field">
               <span>Game type</span>
               <select value={adminMode} onChange={(event) => setAdminMode(event.target.value as GameMode)}>
-                <option value="deathmatch">Deathmatch</option>
+                <option value="deathmatch">Team Deathmatch</option>
                 <option value="capture-the-flag">Capture the Flag</option>
                 <option value="protect-the-king">Protect the King</option>
               </select>
@@ -292,9 +324,61 @@ export default function App() {
                 <option value="iron-pass">Iron Pass</option>
               </select>
             </label>
+            <label className="field">
+              <span>Team Deathmatch target points</span>
+              <input
+                type="number"
+                min={1}
+                max={200}
+                step={1}
+                value={adminSettings.deathmatchTarget}
+                onChange={(event) => {
+                  const next = Number.parseInt(event.target.value, 10);
+                  setAdminSettings((current) => ({
+                    ...current,
+                    deathmatchTarget: Number.isFinite(next) ? next : current.deathmatchTarget,
+                  }));
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Capture the Flag target captures</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={1}
+                value={adminSettings.ctfTarget}
+                onChange={(event) => {
+                  const next = Number.parseInt(event.target.value, 10);
+                  setAdminSettings((current) => ({
+                    ...current,
+                    ctfTarget: Number.isFinite(next) ? next : current.ctfTarget,
+                  }));
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Protect the King king health</span>
+              <input
+                type="number"
+                min={100}
+                max={5000}
+                step={10}
+                value={adminSettings.kingHealth}
+                onChange={(event) => {
+                  const next = Number.parseInt(event.target.value, 10);
+                  setAdminSettings((current) => ({
+                    ...current,
+                    kingHealth: Number.isFinite(next) ? next : current.kingHealth,
+                  }));
+                }}
+              />
+            </label>
             <div className="controlsRow wrap">
               <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isAdmin || !isLobby}>Apply mode</button>
               <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isAdmin || !isLobby}>Apply map</button>
+              <button type="button" onClick={applyModeSettings} disabled={!isAdmin || !isLobby}>Apply settings</button>
               <button type="button" onClick={startMatch} disabled={!isAdmin || !isLobby}>Start</button>
               <button type="button" onClick={togglePause} disabled={!isAdmin || !canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
               <button type="button" onClick={resetLobby} disabled={!isAdmin}>Stop to lobby</button>
