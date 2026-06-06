@@ -647,7 +647,8 @@ function updateBotInput(bot: PlayerState) {
   const left = turnDirection < 0;
   const right = turnDirection > 0;
   const combatDistance = combatTarget ? distance(bot.x, bot.y, combatTarget.x, combatTarget.y) : Number.POSITIVE_INFINITY;
-  const fire = Boolean(combatTarget) && Math.abs(turretDelta) < 0.2 && combatDistance < 560;
+  const hasLineOfSight = Boolean(combatTarget) && !isPathBlocked(bot.x, bot.y, combatTarget!.x, combatTarget!.y, BULLET_RADIUS);
+  const fire = hasLineOfSight && Math.abs(turretDelta) < 0.2 && combatDistance < 560;
 
   bot.input = { up, down, left, right, fire, aimX, aimY };
 }
