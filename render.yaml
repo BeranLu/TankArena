@@ -2,6 +2,7 @@ services:
   - type: web
     name: tank-arena
     runtime: node
+    region: frankfurt
     plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm run start
