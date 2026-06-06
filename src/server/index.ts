@@ -35,6 +35,7 @@ type ProjectileState = ProjectileSnapshot & {
 
 type FlagState = { x: number; y: number; homeX: number; homeY: number; carriedBy: string | null };
 type Point = { x: number; y: number };
+type BotMovementTarget = Point & { preferredDistance: number };
 
 const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
@@ -608,7 +609,7 @@ function updateBotInput(bot: PlayerState) {
     return;
   }
 
-  const desiredMoveTarget = movementTarget ?? (combatTarget ? { x: combatTarget.x, y: combatTarget.y } : undefined);
+  const desiredMoveTarget = movementTarget ?? (combatTarget ? { x: combatTarget.x, y: combatTarget.y, preferredDistance: 140 } : undefined);
   const moveTarget = desiredMoveTarget ? getNavigableTarget(bot, desiredMoveTarget) : { x: bot.x, y: bot.y };
   const moveTargetX = moveTarget.x;
   const moveTargetY = moveTarget.y;
@@ -642,8 +643,9 @@ function updateBotInput(bot: PlayerState) {
 
   const botIndex = Number.parseInt(bot.id.replace('bot-', ''), 10) || 0;
   const reversePulse = blockedByPlayers && Math.sin(Date.now() / 180 + botIndex) > 0.35;
-  const up = distanceToTarget > 150 && !frontBlocked && !blockedByPlayers;
-  const down = distanceToTarget < 70 || reversePulse;
+  const desiredStopDistance = desiredMoveTarget?.preferredDistance ?? 140;
+  const up = distanceToTarget > desiredStopDistance && !frontBlocked && !blockedByPlayers;
+  const down = distanceToTarget < Math.max(26, desiredStopDistance * 0.45) || reversePulse;
   const left = turnDirection < 0;
   const right = turnDirection > 0;
   const combatDistance = combatTarget ? distance(bot.x, bot.y, combatTarget.x, combatTarget.y) : Number.POSITIVE_INFINITY;
@@ -717,9 +719,13 @@ function getTeammateAvoidanceTurn(bot: PlayerState) {
   return steerRightScore > steerLeftScore ? 1 : -1;
 }
 
-function getBotMovementTarget(bot: PlayerState) {
+function getBotMovementTarget(bot: PlayerState): BotMovementTarget | undefined {
   if (state.phase !== 'running' || state.mode !== 'capture-the-flag' || (bot.team !== 'red' && bot.team !== 'blue')) {
-    return pickBotTarget(bot);
+    const combatTarget = pickBotTarget(bot);
+    if (!combatTarget) {
+      return undefined;
+    }
+    return { x: combatTarget.x, y: combatTarget.y, preferredDistance: 140 };
   }
 
   const team = bot.team as Exclude<TeamId, 'observer' | 'none'>;
@@ -729,42 +735,55 @@ function getBotMovementTarget(bot: PlayerState) {
   const defender = isDefenderBot(bot);
 
   if (bot.carryingFlag) {
-    return ownBase;
+    return { x: ownBase.x, y: ownBase.y, preferredDistance: 28 };
   }
 
   if (defender) {
     if (ownFlag.carriedBy) {
       const carrier = state.players.get(ownFlag.carriedBy);
       if (carrier && !carrier.observer && carrier.health > 0) {
-        return { x: carrier.x, y: carrier.y };
+        return { x: carrier.x, y: carrier.y, preferredDistance: 80 };
       }
     }
     const intruder = findNearestEnemyNearPoint(bot, ownBase, 320);
     if (intruder) {
-      return { x: intruder.x, y: intruder.y };
+      return { x: intruder.x, y: intruder.y, preferredDistance: 80 };
     }
-    return getDefenderPatrolPoint(bot, ownBase);
+    const patrol = getDefenderPatrolPoint(bot, ownBase);
+    return { x: patrol.x, y: patrol.y, preferredDistance: 20 };
   }
 
   // Highest priority for attackers: retrieve own flag if an enemy stole it.
   if (ownFlag.carriedBy) {
     const thief = state.players.get(ownFlag.carriedBy);
     if (thief && !thief.observer && thief.health > 0) {
-      return { x: thief.x, y: thief.y };
+      return { x: thief.x, y: thief.y, preferredDistance: 78 };
     }
   }
 
   if (enemyFlag.carriedBy) {
     if (enemyFlag.carriedBy === bot.id) {
-      return ownBase;
+      return { x: ownBase.x, y: ownBase.y, preferredDistance: 28 };
     }
     const allyCarrier = state.players.get(enemyFlag.carriedBy);
     if (allyCarrier && allyCarrier.team === team && allyCarrier.health > 0) {
-      return { x: allyCarrier.x, y: allyCarrier.y };
+      return { x: allyCarrier.x, y: allyCarrier.y, preferredDistance: 72 };
     }
   }
 
-  return { x: enemyFlag.x, y: enemyFlag.y };
+  const capturePoint = getAttackerCapturePoint(bot, enemyFlag);
+  return { x: capturePoint.x, y: capturePoint.y, preferredDistance: 14 };
+}
+
+function getAttackerCapturePoint(bot: PlayerState, enemyFlag: FlagState) {
+  const idNumber = Number.parseInt(bot.id.replace('bot-', ''), 10);
+  const slot = Number.isFinite(idNumber) ? idNumber : 0;
+  const angle = ((slot % 6) / 6) * Math.PI * 2;
+  const radius = 10;
+  return {
+    x: clamp(enemyFlag.x + Math.cos(angle) * radius, PLAYER_RADIUS, state.map.width - PLAYER_RADIUS),
+    y: clamp(enemyFlag.y + Math.sin(angle) * radius, PLAYER_RADIUS, state.map.height - PLAYER_RADIUS),
+  };
 }
 
 function getDefenderPatrolPoint(bot: PlayerState, base: Point) {
