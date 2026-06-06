@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, GameMode, GameSnapshot, ModeSettings, PlayerInput, ServerToClientEvents, TeamId } from '../shared/types';
+import type { ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, ServerToClientEvents, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
@@ -36,6 +36,10 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
   const [name, setName] = useState('Tank Pilot');
   const [joined, setJoined] = useState(false);
+  const [lobbies, setLobbies] = useState<LobbySummary[]>([]);
+  const [selectedLobbyId, setSelectedLobbyId] = useState('');
+  const [newLobbyName, setNewLobbyName] = useState('');
+  const [currentLobby, setCurrentLobby] = useState<{ id: string; name: string } | null>(null);
   const [observer, setObserver] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [announcement, setAnnouncement] = useState('');
@@ -50,6 +54,7 @@ export default function App() {
   useEffect(() => {
     const nextSocket = io();
     setSocket(nextSocket);
+    nextSocket.emit('listLobbies');
 
     nextSocket.on('snapshot', (nextSnapshot) => {
       setSnapshot(nextSnapshot);
@@ -57,10 +62,21 @@ export default function App() {
         setIsAdmin(true);
       }
     });
+    nextSocket.on('lobbyList', (nextLobbies: LobbySummary[]) => {
+      setLobbies(nextLobbies);
+      setSelectedLobbyId((current) => {
+        if (current && nextLobbies.some((lobby) => lobby.id === current)) {
+          return current;
+        }
+        return nextLobbies[0]?.id ?? '';
+      });
+    });
     nextSocket.on('joined', (payload) => {
       setJoined(true);
       setObserver(payload.observer);
       setIsAdmin(payload.admin);
+      setCurrentLobby({ id: payload.lobbyId, name: payload.lobbyName });
+      setSelectedLobbyId(payload.lobbyId);
     });
     nextSocket.on('message', (text) => setAnnouncement(text));
 
@@ -163,7 +179,25 @@ export default function App() {
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
 
-  const join = () => socket?.emit('join', { name });
+  const join = () => {
+    if (!selectedLobbyId) {
+      return;
+    }
+    socket?.emit('joinLobby', { lobbyId: selectedLobbyId, name });
+  };
+  const createLobby = () => {
+    socket?.emit('createLobby', { name: newLobbyName });
+    setNewLobbyName('');
+  };
+  const leaveLobby = () => {
+    socket?.emit('leaveLobby');
+    setJoined(false);
+    setObserver(false);
+    setIsAdmin(false);
+    setCurrentLobby(null);
+    setSnapshot(null);
+    socket?.emit('listLobbies');
+  };
   const claimAdmin = () => socket?.emit('claimAdmin', { password: adminPassword });
   const ready = (value: boolean) => socket?.emit('setReady', value);
   const startMatch = () => socket?.emit('startMatch');
@@ -211,7 +245,7 @@ export default function App() {
           <p className="eyebrow">Local network tank arena</p>
           <h1>Tank Arena</h1>
         </div>
-        <div className="statusPill">{snapshot ? snapshot.phase : 'connecting'}</div>
+        <div className="statusPill">{joined ? (snapshot ? snapshot.phase : 'loading') : 'lobby browser'}</div>
       </header>
 
       {announcement ? <div className="announcement">{announcement}</div> : null}
@@ -262,7 +296,26 @@ export default function App() {
                 <span>Call sign</span>
                 <input value={name} onChange={(event) => setName(event.target.value)} maxLength={20} />
               </label>
-              <button type="button" onClick={join}>Join lobby</button>
+              <label className="field">
+                <span>Choose lobby</span>
+                <select value={selectedLobbyId} onChange={(event) => setSelectedLobbyId(event.target.value)}>
+                  {lobbies.length === 0 ? <option value="">No lobbies available</option> : null}
+                  {lobbies.map((lobby) => (
+                    <option key={lobby.id} value={lobby.id}>
+                      {lobby.name} · {lobby.players} players · {lobby.bots} bots · {MODES[lobby.mode]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="controlsRow wrap">
+                <button type="button" onClick={join} disabled={!selectedLobbyId}>Join selected lobby</button>
+                <button type="button" onClick={() => socket?.emit('listLobbies')}>Refresh list</button>
+              </div>
+              <label className="field">
+                <span>Create lobby</span>
+                <input value={newLobbyName} onChange={(event) => setNewLobbyName(event.target.value)} maxLength={28} placeholder="New lobby name" />
+              </label>
+              <button type="button" onClick={createLobby}>Create lobby</button>
             </div>
           ) : null}
 
@@ -276,7 +329,10 @@ export default function App() {
 
         <aside className="sidebar">
           <section className="panel">
-            <h2>Lobby</h2>
+            <div className="panelHeader compact">
+              <h2>{currentLobby?.name ?? 'Lobby'}</h2>
+              <button type="button" onClick={leaveLobby} disabled={!joined}>Leave</button>
+            </div>
             <div className="statsGrid">
               <div><span>Players</span><strong>{snapshot?.activePlayers ?? 0}</strong></div>
               <div><span>Clients</span><strong>{snapshot?.connectedClients ?? 0}</strong></div>

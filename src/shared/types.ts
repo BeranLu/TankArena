@@ -95,8 +95,21 @@ export interface GameSnapshot {
   roundResult: RoundResult | null;
 }
 
+export interface LobbySummary {
+  id: string;
+  name: string;
+  phase: MatchPhase;
+  mode: GameMode;
+  mapName: string;
+  players: number;
+  bots: number;
+}
+
 export interface ClientToServerEvents {
-  join: (payload: { name: string }) => void;
+  listLobbies: () => void;
+  createLobby: (payload: { name: string }) => void;
+  joinLobby: (payload: { lobbyId: string; name: string }) => void;
+  leaveLobby: () => void;
   claimAdmin: (payload?: { password?: string }) => void;
   addBot: () => void;
   removeBot: () => void;
@@ -112,6 +125,7 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   snapshot: (snapshot: GameSnapshot) => void;
-  joined: (payload: { observer: boolean; admin: boolean; team: TeamId }) => void;
+  joined: (payload: { observer: boolean; admin: boolean; team: TeamId; lobbyId: string; lobbyName: string }) => void;
+  lobbyList: (lobbies: LobbySummary[]) => void;
   message: (text: string) => void;
 }

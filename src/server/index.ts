@@ -9,6 +9,7 @@ import type {
   ClientToServerEvents,
   GameMode,
   GameSnapshot,
+  LobbySummary,
   MatchPhase,
   ModeSettings,
   PlayerInput,
@@ -36,6 +37,29 @@ type ProjectileState = ProjectileSnapshot & {
 type FlagState = { x: number; y: number; homeX: number; homeY: number; carriedBy: string | null };
 type Point = { x: number; y: number };
 type BotMovementTarget = Point & { preferredDistance: number };
+type LobbyState = {
+  id: string;
+  name: string;
+  phase: MatchPhase;
+  mode: GameMode;
+  map: ArenaMap;
+  players: Map<string, PlayerState>;
+  projectiles: Map<string, ProjectileState>;
+  redFlag: FlagState;
+  blueFlag: FlagState;
+  score: { red: number; blue: number };
+  modeSettings: ModeSettings;
+  adminId: string | null;
+  nextBotId: number;
+  message: string;
+  roundResult: RoundResult | null;
+};
+type LobbyRuntime = {
+  id: string;
+  name: string;
+  state: LobbyState;
+  loop: NodeJS.Timeout;
+};
 
 const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
@@ -54,6 +78,11 @@ const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
 const DEFAULT_KING_HEALTH = 500;
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? '').trim();
 const BOT_NAME_PREFIX = 'BOT';
+const MAX_LOBBIES = parseLimit(process.env.MAX_LOBBIES, 8);
+const MAX_PLAYERS_PER_LOBBY = parseLimit(process.env.MAX_PLAYERS_PER_LOBBY, 10);
+const MAX_BOTS_PER_LOBBY = parseLimit(process.env.MAX_BOTS_PER_LOBBY, 6);
+const MAX_TOTAL_PLAYERS = parseLimit(process.env.MAX_TOTAL_PLAYERS, 40);
+const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
 const MAPS: Record<string, ArenaMap> = {
@@ -118,69 +147,114 @@ if (fs.existsSync(clientDir)) {
   });
 }
 
-const state = {
-  phase: 'lobby' as MatchPhase,
-  mode: 'deathmatch' as GameMode,
-  map: MAPS['cargo-yard'],
-  players: new Map<string, PlayerState>(),
-  projectiles: new Map<string, ProjectileState>(),
-  redFlag: { x: MAPS['cargo-yard'].redFlag.x, y: MAPS['cargo-yard'].redFlag.y, homeX: MAPS['cargo-yard'].redFlag.x, homeY: MAPS['cargo-yard'].redFlag.y, carriedBy: null } satisfies FlagState,
-  blueFlag: { x: MAPS['cargo-yard'].blueFlag.x, y: MAPS['cargo-yard'].blueFlag.y, homeX: MAPS['cargo-yard'].blueFlag.x, homeY: MAPS['cargo-yard'].blueFlag.y, carriedBy: null } satisfies FlagState,
-  score: { red: 0, blue: 0 },
-  modeSettings: {
-    deathmatchTarget: DEFAULT_TEAM_DEATHMATCH_WIN_SCORE,
-    ctfTarget: DEFAULT_CTF_WIN_SCORE,
-    kingHealth: DEFAULT_KING_HEALTH,
-  } satisfies ModeSettings,
-  adminId: null as string | null,
-  nextBotId: 1,
-  message: 'Waiting for players to join the lobby.',
-  roundResult: null as RoundResult | null,
-};
+const lobbyRuntimes = new Map<string, LobbyRuntime>();
+const socketLobbyMap = new Map<string, string>();
+let lobbyCounter = 1;
+let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby');
+
+createLobbyRuntime(DEFAULT_LOBBY_ID, 'Main Lobby');
 
 io.on('connection', (socket) => {
-  socket.on('join', ({ name }: { name: string }) => {
-    const observer = state.phase !== 'lobby';
-    const team: TeamId = observer ? 'observer' : 'none';
-    const spawnSlot = observer ? 0 : teamPlayerCount('none');
-    const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
-    const player: PlayerState = {
-      id: socket.id,
-      socketId: socket.id,
-      name: sanitizeName(name),
-      isBot: false,
-      team,
-      x: spawn.x,
-      y: spawn.y,
-      bodyAngle: 0,
-      turretAngle: 0,
-      health: BASE_HEALTH,
-      maxHealth: BASE_HEALTH,
-      score: 0,
-      ready: false,
-      observer,
-      admin: state.adminId === socket.id,
-      carryingFlag: false,
-      isKing: false,
-      shielded: false,
-      input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
-      respawnAt: 0,
-      shootCooldown: 0,
-      shieldUntil: 0,
-    };
+  socket.emit('lobbyList', buildLobbyList());
 
-    state.players.set(socket.id, player);
-    if (!state.adminId) {
-      state.adminId = socket.id;
-      player.admin = true;
+  socket.on('listLobbies', () => {
+    socket.emit('lobbyList', buildLobbyList());
+  });
+
+  socket.on('createLobby', ({ name }: { name: string }) => {
+    if (lobbyRuntimes.size >= MAX_LOBBIES) {
+      socket.emit('message', `Lobby limit reached (${MAX_LOBBIES}).`);
+      return;
+    }
+    const runtime = createLobbyRuntime(nextLobbyId(), sanitizeLobbyName(name));
+    socket.emit('message', `Lobby ${runtime.name} created.`);
+    emitLobbyList();
+  });
+
+  socket.on('joinLobby', ({ lobbyId, name }: { lobbyId: string; name: string }) => {
+    const runtime = lobbyRuntimes.get(lobbyId);
+    if (!runtime) {
+      socket.emit('message', 'That lobby no longer exists.');
+      socket.emit('lobbyList', buildLobbyList());
+      return;
     }
 
-    socket.emit('joined', { observer, admin: player.admin, team });
-    broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
-    emitSnapshot();
+    const current = getSocketLobby(socket.id);
+    if (current?.id === lobbyId && runtime.state.players.has(socket.id)) {
+      socket.emit('message', `Already in ${runtime.name}.`);
+      return;
+    }
+
+    if (countLobbyHumans(runtime) >= MAX_PLAYERS_PER_LOBBY) {
+      socket.emit('message', `Lobby is full (${MAX_PLAYERS_PER_LOBBY} players max).`);
+      return;
+    }
+    const countedInTotal = current?.state.players.has(socket.id) ? 1 : 0;
+    if (countTotalHumans() - countedInTotal >= MAX_TOTAL_PLAYERS) {
+      socket.emit('message', `Server is full (${MAX_TOTAL_PLAYERS} total players max).`);
+      return;
+    }
+
+    leaveLobby(socket.id, '');
+    socket.join(lobbyRoom(lobbyId));
+    socketLobbyMap.set(socket.id, lobbyId);
+
+    runInLobby(runtime, () => {
+      const observer = state.phase !== 'lobby';
+      const team: TeamId = observer ? 'observer' : 'none';
+      const spawnSlot = observer ? 0 : teamPlayerCount('none');
+      const spawn = observer ? { x: state.map.width / 2, y: state.map.height / 2 } : findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
+      const player: PlayerState = {
+        id: socket.id,
+        socketId: socket.id,
+        name: sanitizeName(name),
+        isBot: false,
+        team,
+        x: spawn.x,
+        y: spawn.y,
+        bodyAngle: 0,
+        turretAngle: 0,
+        health: BASE_HEALTH,
+        maxHealth: BASE_HEALTH,
+        score: 0,
+        ready: false,
+        observer,
+        admin: state.adminId === socket.id,
+        carryingFlag: false,
+        isKing: false,
+        shielded: false,
+        input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
+        respawnAt: 0,
+        shootCooldown: 0,
+        shieldUntil: 0,
+      };
+
+      state.players.set(socket.id, player);
+      if (!state.adminId) {
+        state.adminId = socket.id;
+        player.admin = true;
+      }
+
+      socket.emit('joined', { observer, admin: player.admin, team, lobbyId: runtime.id, lobbyName: runtime.name });
+      broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
+      emitSnapshot();
+    });
+
+    emitLobbyList();
+  });
+
+  socket.on('leaveLobby', () => {
+    if (leaveLobby(socket.id, '')) {
+      socket.emit('message', 'Left lobby.');
+      socket.emit('lobbyList', buildLobbyList());
+    }
   });
 
   socket.on('claimAdmin', (payload?: { password?: string }) => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
+      return;
+    }
     if (ADMIN_PASSWORD.length > 0) {
       const provided = (payload?.password ?? '').trim();
       if (provided !== ADMIN_PASSWORD) {
@@ -188,128 +262,329 @@ io.on('connection', (socket) => {
         return;
       }
     }
-    state.adminId = socket.id;
-    refreshAdminFlags();
-    broadcast('Admin console claimed.');
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      state.adminId = socket.id;
+      refreshAdminFlags();
+      broadcast('Admin console claimed.');
+      emitSnapshot();
+    });
   });
 
   socket.on('addBot', () => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    const bot = createBot();
-    state.players.set(bot.id, bot);
-    state.message = `${bot.name} added to lobby.`;
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      const botCount = Array.from(state.players.values()).filter((player) => player.isBot).length;
+      if (botCount >= MAX_BOTS_PER_LOBBY) {
+        socket.emit('message', `Bot limit reached in this lobby (${MAX_BOTS_PER_LOBBY}).`);
+        return;
+      }
+      const bot = createBot();
+      state.players.set(bot.id, bot);
+      state.message = `${bot.name} added to lobby.`;
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('removeBot', () => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    const bots = Array.from(state.players.values()).filter((player) => player.isBot);
-    const bot = bots[bots.length - 1];
-    if (!bot) {
-      return;
-    }
-    state.players.delete(bot.id);
-    state.message = `${bot.name} removed from lobby.`;
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      const bots = Array.from(state.players.values()).filter((player) => player.isBot);
+      const bot = bots[bots.length - 1];
+      if (!bot) {
+        return;
+      }
+      state.players.delete(bot.id);
+      state.message = `${bot.name} removed from lobby.`;
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('setReady', (ready: boolean) => {
-    const player = state.players.get(socket.id);
-    if (!player || player.observer) {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    player.ready = ready;
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      const player = state.players.get(socket.id);
+      if (!player || player.observer) {
+        return;
+      }
+      player.ready = ready;
+      emitSnapshot();
+    });
   });
 
   socket.on('setMap', (mapId: string) => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    const map = MAPS[mapId];
-    if (!map) {
-      return;
-    }
-    state.map = map;
-    resetWorld(true);
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      const map = MAPS[mapId];
+      if (!map) {
+        return;
+      }
+      state.map = map;
+      resetWorld(true);
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('setMode', (mode: GameMode) => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    state.mode = mode;
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      state.mode = mode;
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('setModeSettings', (settings: ModeSettings) => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    if (!settings) {
-      return;
-    }
-    state.modeSettings = sanitizeModeSettings(settings);
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      if (!settings) {
+        return;
+      }
+      state.modeSettings = sanitizeModeSettings(settings);
+      emitSnapshot();
+    });
   });
 
   socket.on('startMatch', () => {
-    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    state.phase = 'running';
-    state.message = `${formatMode(state.mode)} started.`;
-    resetRoundState();
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+        return;
+      }
+      state.phase = 'running';
+      state.message = `${formatMode(state.mode)} started.`;
+      resetRoundState();
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('togglePause', () => {
-    if (!isAdmin(socket.id) || state.phase === 'lobby') {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    state.phase = state.phase === 'paused' ? 'running' : 'paused';
-    state.message = state.phase === 'paused' ? 'Match paused.' : 'Match resumed.';
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id) || state.phase === 'lobby') {
+        return;
+      }
+      state.phase = state.phase === 'paused' ? 'running' : 'paused';
+      state.message = state.phase === 'paused' ? 'Match paused.' : 'Match resumed.';
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('resetLobby', () => {
-    if (!isAdmin(socket.id)) {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    state.phase = 'lobby';
-    state.message = 'Lobby reset. Players can ready up again.';
-    resetRoundState();
-    emitSnapshot();
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id)) {
+        return;
+      }
+      state.phase = 'lobby';
+      state.message = 'Lobby reset. Players can ready up again.';
+      resetRoundState();
+      emitSnapshot();
+      emitLobbyList();
+    });
   });
 
   socket.on('input', (input: PlayerInput) => {
-    const player = state.players.get(socket.id);
-    if (!player || player.observer) {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
       return;
     }
-    player.input = input;
+    runInLobby(runtime, () => {
+      const player = state.players.get(socket.id);
+      if (!player || player.observer) {
+        return;
+      }
+      player.input = input;
+    });
   });
 
   socket.on('disconnect', () => {
-    const wasAdmin = state.adminId === socket.id;
-    state.players.delete(socket.id);
+    leaveLobby(socket.id, '');
+  });
+});
+
+function parseLimit(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseInt((raw ?? '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function nextLobbyId() {
+  lobbyCounter += 1;
+  return `lobby-${lobbyCounter}`;
+}
+
+function sanitizeLobbyName(name: string) {
+  const trimmed = name.trim().slice(0, 28);
+  return trimmed.length ? trimmed : `Lobby ${lobbyCounter + 1}`;
+}
+
+function lobbyRoom(lobbyId: string) {
+  return `lobby:${lobbyId}`;
+}
+
+function createLobbyState(id: string, name: string): LobbyState {
+  return {
+    id,
+    name,
+    phase: 'lobby',
+    mode: 'deathmatch',
+    map: MAPS['cargo-yard'],
+    players: new Map<string, PlayerState>(),
+    projectiles: new Map<string, ProjectileState>(),
+    redFlag: { x: MAPS['cargo-yard'].redFlag.x, y: MAPS['cargo-yard'].redFlag.y, homeX: MAPS['cargo-yard'].redFlag.x, homeY: MAPS['cargo-yard'].redFlag.y, carriedBy: null },
+    blueFlag: { x: MAPS['cargo-yard'].blueFlag.x, y: MAPS['cargo-yard'].blueFlag.y, homeX: MAPS['cargo-yard'].blueFlag.x, homeY: MAPS['cargo-yard'].blueFlag.y, carriedBy: null },
+    score: { red: 0, blue: 0 },
+    modeSettings: {
+      deathmatchTarget: DEFAULT_TEAM_DEATHMATCH_WIN_SCORE,
+      ctfTarget: DEFAULT_CTF_WIN_SCORE,
+      kingHealth: DEFAULT_KING_HEALTH,
+    },
+    adminId: null,
+    nextBotId: 1,
+    message: 'Waiting for players to join the lobby.',
+    roundResult: null,
+  };
+}
+
+function createLobbyRuntime(id: string, name: string) {
+  const runtime: LobbyRuntime = {
+    id,
+    name,
+    state: createLobbyState(id, name),
+    loop: setInterval(() => {
+      runInLobby(runtime, () => {
+        gameLoop();
+      });
+    }, TICK_MS),
+  };
+  lobbyRuntimes.set(id, runtime);
+  return runtime;
+}
+
+function runInLobby<T>(runtime: LobbyRuntime, callback: () => T) {
+  const previous = state;
+  state = runtime.state;
+  try {
+    const result = callback();
+    runtime.state = state;
+    return result;
+  } finally {
+    state = previous;
+  }
+}
+
+function getSocketLobby(socketId: string) {
+  const lobbyId = socketLobbyMap.get(socketId);
+  if (!lobbyId) {
+    return undefined;
+  }
+  return lobbyRuntimes.get(lobbyId);
+}
+
+function countLobbyHumans(runtime: LobbyRuntime) {
+  return Array.from(runtime.state.players.values()).filter((player) => !player.isBot).length;
+}
+
+function countTotalHumans() {
+  return Array.from(lobbyRuntimes.values()).reduce((total, runtime) => total + countLobbyHumans(runtime), 0);
+}
+
+function buildLobbyList(): LobbySummary[] {
+  return Array.from(lobbyRuntimes.values()).map((runtime) => ({
+    id: runtime.id,
+    name: runtime.name,
+    phase: runtime.state.phase,
+    mode: runtime.state.mode,
+    mapName: runtime.state.map.name,
+    players: countLobbyHumans(runtime),
+    bots: Array.from(runtime.state.players.values()).filter((player) => player.isBot).length,
+  }));
+}
+
+function emitLobbyList() {
+  io.emit('lobbyList', buildLobbyList());
+}
+
+function leaveLobby(socketId: string, reason: string) {
+  const runtime = getSocketLobby(socketId);
+  if (!runtime) {
+    return false;
+  }
+  socketLobbyMap.delete(socketId);
+  io.sockets.sockets.get(socketId)?.leave(lobbyRoom(runtime.id));
+
+  runInLobby(runtime, () => {
+    const player = state.players.get(socketId);
+    if (!player) {
+      return;
+    }
+    const wasAdmin = state.adminId === socketId;
+    state.players.delete(socketId);
     if (wasAdmin) {
       state.adminId = null;
-      const next = Array.from(state.players.values()).find((player) => !player.isBot);
+      const next = Array.from(state.players.values()).find((candidate) => !candidate.isBot);
       if (next) {
         state.adminId = next.id;
       }
       refreshAdminFlags();
     }
+    state.message = reason || `${player.name} left the lobby.`;
+    io.to(lobbyRoom(runtime.id)).emit('message', state.message);
     emitSnapshot();
   });
-});
+
+  emitLobbyList();
+  return true;
+}
 
 function formatMode(mode: GameMode) {
   return mode.replaceAll('-', ' ');
@@ -463,12 +738,12 @@ function resetWorld(resetPlayers = false) {
 }
 
 function emitSnapshot() {
-  io.emit('snapshot', buildSnapshot());
+  io.to(lobbyRoom(state.id)).emit('snapshot', buildSnapshot());
 }
 
 function broadcast(message: string) {
   state.message = message;
-  io.emit('message', message);
+  io.to(lobbyRoom(state.id)).emit('message', message);
 }
 
 function buildSnapshot(): GameSnapshot {
@@ -1371,8 +1646,6 @@ function getTeamKingHealth(team: Exclude<TeamId, 'observer' | 'none'>) {
 function getTeamKing(team: Exclude<TeamId, 'observer' | 'none'>) {
   return Array.from(state.players.values()).find((player) => !player.observer && player.team === team && player.isKing && player.health > 0);
 }
-
-setInterval(gameLoop, TICK_MS);
 
 const productionClient = path.resolve(process.cwd(), 'dist/client');
 if (fs.existsSync(productionClient)) {
