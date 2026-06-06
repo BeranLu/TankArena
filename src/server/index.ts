@@ -21,7 +21,7 @@ import type {
 
 type PlayerState = PlayerSnapshot & {
   input: PlayerInput;
-  socketId: string;
+  socketId: string | null;
   respawnAt: number;
   shootCooldown: number;
   shieldUntil: number;
@@ -51,6 +51,7 @@ const DEFAULT_CTF_WIN_SCORE = 3;
 const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
 const DEFAULT_KING_HEALTH = 500;
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD ?? '').trim();
+const BOT_NAME_PREFIX = 'BOT';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
 const MAPS: Record<string, ArenaMap> = {
@@ -130,6 +131,7 @@ const state = {
     kingHealth: DEFAULT_KING_HEALTH,
   } satisfies ModeSettings,
   adminId: null as string | null,
+  nextBotId: 1,
   message: 'Waiting for players to join the lobby.',
   roundResult: null as RoundResult | null,
 };
@@ -144,6 +146,7 @@ io.on('connection', (socket) => {
       id: socket.id,
       socketId: socket.id,
       name: sanitizeName(name),
+      isBot: false,
       team,
       x: spawn.x,
       y: spawn.y,
@@ -186,6 +189,30 @@ io.on('connection', (socket) => {
     state.adminId = socket.id;
     refreshAdminFlags();
     broadcast('Admin console claimed.');
+    emitSnapshot();
+  });
+
+  socket.on('addBot', () => {
+    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+      return;
+    }
+    const bot = createBot();
+    state.players.set(bot.id, bot);
+    state.message = `${bot.name} added to lobby.`;
+    emitSnapshot();
+  });
+
+  socket.on('removeBot', () => {
+    if (!isAdmin(socket.id) || state.phase !== 'lobby') {
+      return;
+    }
+    const bots = Array.from(state.players.values()).filter((player) => player.isBot);
+    const bot = bots[bots.length - 1];
+    if (!bot) {
+      return;
+    }
+    state.players.delete(bot.id);
+    state.message = `${bot.name} removed from lobby.`;
     emitSnapshot();
   });
 
@@ -272,7 +299,7 @@ io.on('connection', (socket) => {
     state.players.delete(socket.id);
     if (wasAdmin) {
       state.adminId = null;
-      const next = state.players.values().next().value as PlayerState | undefined;
+      const next = Array.from(state.players.values()).find((player) => !player.isBot);
       if (next) {
         state.adminId = next.id;
       }
@@ -297,8 +324,42 @@ function isAdmin(socketId: string) {
 
 function refreshAdminFlags() {
   for (const player of state.players.values()) {
-    player.admin = player.id === state.adminId;
+    player.admin = !player.isBot && player.id === state.adminId;
   }
+}
+
+function createBot() {
+  const id = `bot-${state.nextBotId}`;
+  state.nextBotId += 1;
+  const spawnSlot = teamPlayerCount('none');
+  const spawn = findSpawnPosition('none', PLAYER_RADIUS, spawnSlot);
+  const name = `${BOT_NAME_PREFIX}-${String(state.nextBotId - 1).padStart(2, '0')}`;
+  const player: PlayerState = {
+    id,
+    socketId: null,
+    name,
+    isBot: true,
+    team: 'none',
+    x: spawn.x,
+    y: spawn.y,
+    bodyAngle: Math.random() * Math.PI * 2,
+    turretAngle: 0,
+    health: BASE_HEALTH,
+    maxHealth: BASE_HEALTH,
+    score: 0,
+    ready: true,
+    observer: false,
+    admin: false,
+    carryingFlag: false,
+    isKing: false,
+    shielded: false,
+    input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
+    respawnAt: 0,
+    shootCooldown: 0,
+    shieldUntil: 0,
+  };
+  player.turretAngle = player.bodyAngle;
+  return player;
 }
 
 function teamPlayerCount(team: ActiveTeam) {
@@ -416,6 +477,7 @@ function buildSnapshot(): GameSnapshot {
     players: Array.from(state.players.values()).map((player) => ({
       id: player.id,
       name: player.name,
+      isBot: player.isBot,
       team: player.team,
       x: player.x,
       y: player.y,
@@ -442,7 +504,7 @@ function buildSnapshot(): GameSnapshot {
     kingHealth: { red: getTeamKingHealth('red'), blue: getTeamKingHealth('blue') },
     score: state.score,
     activePlayers: Array.from(state.players.values()).filter((player) => !player.observer).length,
-    connectedClients: state.players.size,
+    connectedClients: Array.from(state.players.values()).filter((player) => !player.isBot).length,
     adminId: state.adminId,
     message: state.message,
     roundResult: state.roundResult,
@@ -473,6 +535,11 @@ function gameLoop() {
   }
 
   const now = Date.now();
+  for (const bot of state.players.values()) {
+    if (bot.isBot) {
+      updateBotInput(bot);
+    }
+  }
   for (const player of state.players.values()) {
     if (player.observer) {
       continue;
@@ -524,6 +591,56 @@ function gameLoop() {
 
   updateProjectiles(TICK_MS / 1000);
   emitSnapshot();
+}
+
+function updateBotInput(bot: PlayerState) {
+  if (bot.observer || bot.health <= 0) {
+    bot.input = { ...bot.input, up: false, down: false, left: false, right: false, fire: false };
+    return;
+  }
+
+  const target = pickBotTarget(bot);
+  if (!target) {
+    bot.input = { ...bot.input, up: false, down: false, left: false, right: false, fire: false, aimX: bot.x + Math.cos(bot.bodyAngle) * 120, aimY: bot.y + Math.sin(bot.bodyAngle) * 120 };
+    return;
+  }
+
+  const aimX = target.x;
+  const aimY = target.y;
+  const targetAngle = Math.atan2(target.y - bot.y, target.x - bot.x);
+  const distanceToTarget = distance(bot.x, bot.y, target.x, target.y);
+  const hullDelta = wrapAngle(targetAngle - bot.bodyAngle);
+  const turretDelta = wrapAngle(targetAngle - bot.turretAngle);
+
+  const up = distanceToTarget > 150;
+  const down = distanceToTarget < 70;
+  const left = hullDelta < -0.1;
+  const right = hullDelta > 0.1;
+  const fire = Math.abs(turretDelta) < 0.2 && distanceToTarget < 560;
+
+  bot.input = { up, down, left, right, fire, aimX, aimY };
+}
+
+function pickBotTarget(bot: PlayerState) {
+  let nearest: PlayerState | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of state.players.values()) {
+    if (candidate.id === bot.id || candidate.observer || candidate.health <= 0) {
+      continue;
+    }
+    const sameTeamDuringRound = state.phase === 'running' && bot.team !== 'none' && candidate.team === bot.team;
+    if (sameTeamDuringRound) {
+      continue;
+    }
+    const d = distance(bot.x, bot.y, candidate.x, candidate.y);
+    if (d < nearestDistance) {
+      nearestDistance = d;
+      nearest = candidate;
+    }
+  }
+
+  return nearest;
 }
 
 function movePlayer(player: PlayerState, deltaX: number, deltaY: number) {

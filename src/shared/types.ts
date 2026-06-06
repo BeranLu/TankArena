@@ -53,6 +53,7 @@ export interface PlayerInput {
 export interface PlayerSnapshot {
   id: string;
   name: string;
+  isBot: boolean;
   team: TeamId;
   x: number;
   y: number;
@@ -97,6 +98,8 @@ export interface GameSnapshot {
 export interface ClientToServerEvents {
   join: (payload: { name: string }) => void;
   claimAdmin: (payload?: { password?: string }) => void;
+  addBot: () => void;
+  removeBot: () => void;
   setReady: (ready: boolean) => void;
   setMap: (mapId: string) => void;
   setMode: (mode: GameMode) => void;

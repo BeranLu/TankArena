@@ -288,7 +288,7 @@ export default function App() {
               {sortedPlayers.map((player) => (
                 <li key={player.id}>
                   <span className="dot" style={{ background: TEAM_COLORS[player.team] }} />
-                  <span>{player.name}</span>
+                  <span>{player.name}{player.isBot ? ' [BOT]' : ''}</span>
                   <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
                 </li>
               ))}
@@ -379,6 +379,8 @@ export default function App() {
               <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isAdmin || !isLobby}>Apply mode</button>
               <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isAdmin || !isLobby}>Apply map</button>
               <button type="button" onClick={applyModeSettings} disabled={!isAdmin || !isLobby}>Apply settings</button>
+              <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isAdmin || !isLobby}>+ Bot</button>
+              <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isAdmin || !isLobby}>- Bot</button>
               <button type="button" onClick={startMatch} disabled={!isAdmin || !isLobby}>Start</button>
               <button type="button" onClick={togglePause} disabled={!isAdmin || !canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
               <button type="button" onClick={resetLobby} disabled={!isAdmin}>Stop to lobby</button>
