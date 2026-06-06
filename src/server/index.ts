@@ -24,6 +24,7 @@ type PlayerState = PlayerSnapshot & {
   socketId: string;
   respawnAt: number;
   shootCooldown: number;
+  shieldUntil: number;
 };
 
 type ProjectileState = ProjectileSnapshot & {
@@ -45,6 +46,7 @@ const REVERSE_SPEED_MULTIPLIER = 0.65;
 const HULL_TURN_SPEED = 2.5;
 const TURRET_TURN_SPEED = 3.4;
 const BULLET_SPEED = 460;
+const RESPAWN_SHIELD_MS = 5000;
 const DEFAULT_CTF_WIN_SCORE = 3;
 const DEFAULT_TEAM_DEATHMATCH_WIN_SCORE = 10;
 const DEFAULT_KING_HEALTH = 500;
@@ -155,9 +157,11 @@ io.on('connection', (socket) => {
       admin: state.adminId === socket.id,
       carryingFlag: false,
       isKing: false,
+      shielded: false,
       input: { up: false, down: false, left: false, right: false, fire: false, aimX: spawn.x, aimY: spawn.y },
       respawnAt: 0,
       shootCooldown: 0,
+      shieldUntil: 0,
     };
 
     state.players.set(socket.id, player);
@@ -425,6 +429,7 @@ function buildSnapshot(): GameSnapshot {
       admin: player.admin,
       carryingFlag: player.carryingFlag,
       isKing: player.isKing,
+      shielded: Date.now() < player.shieldUntil,
     })),
     projectiles: Array.from(state.projectiles.values()).map((projectile) => ({
       id: projectile.id,
@@ -576,12 +581,14 @@ function respawn(player: PlayerState) {
   player.health = player.maxHealth;
   player.respawnAt = 0;
   player.carryingFlag = false;
+  player.shieldUntil = Date.now() + RESPAWN_SHIELD_MS;
 }
 
 function fire(player: PlayerState) {
   if (player.shootCooldown > 0) {
     return;
   }
+  player.shieldUntil = 0;
   const team = player.team as ActiveTeam;
   const id = `${player.id}-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
   const projectile: ProjectileState = {
@@ -619,6 +626,10 @@ function updateProjectiles(deltaSeconds: number) {
         continue;
       }
       if (distance(player.x, player.y, projectile.x, projectile.y) < getTankRadius(player) + BULLET_RADIUS) {
+        if (Date.now() < player.shieldUntil) {
+          consumed = true;
+          break;
+        }
         player.health -= 25;
         if (player.health <= 0) {
           if (state.mode === 'protect-the-king' && player.isKing) {
@@ -749,6 +760,7 @@ function resetRoundState() {
     player.isKing = false;
     player.score = 0;
     player.carryingFlag = false;
+    player.shieldUntil = 0;
     player.respawnAt = 0;
     player.shootCooldown = 0;
     const team = (state.phase === 'running' ? player.team : 'none') as ActiveTeam;

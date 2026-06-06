@@ -445,6 +445,17 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
     context.beginPath();
     context.rect(-bodyHalfWidth, -bodyHalfHeight, bodyHalfWidth * 2, bodyHalfHeight * 2);
     context.fill();
+
+    // Team-colored nose marker to make hull forward direction obvious.
+    const noseColor = player.team === 'red' ? '#ffd1d1' : player.team === 'blue' ? '#ccefff' : '#f8fafc';
+    context.fillStyle = noseColor;
+    context.beginPath();
+    context.moveTo(bodyHalfWidth - 2 * bodyScale, 0);
+    context.lineTo(bodyHalfWidth - 9 * bodyScale, -4.5 * bodyScale);
+    context.lineTo(bodyHalfWidth - 9 * bodyScale, 4.5 * bodyScale);
+    context.closePath();
+    context.fill();
+
     context.fillStyle = 'rgba(0, 0, 0, 0.25)';
     context.fillRect(-8 * bodyScale, (-14) * bodyScale, 16 * bodyScale, 4 * bodyScale);
     context.fillRect(-8 * bodyScale, 10 * bodyScale, 16 * bodyScale, 4 * bodyScale);
@@ -483,6 +494,18 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
       context.beginPath();
       context.arc(player.x, player.y, 18 * bodyScale, 0, Math.PI * 2);
       context.stroke();
+    }
+
+    if (player.shielded) {
+      context.strokeStyle = 'rgba(125, 211, 252, 0.95)';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(player.x, player.y, 22 * bodyScale, 0, Math.PI * 2);
+      context.stroke();
+      context.lineWidth = 1;
+      context.fillStyle = '#7dd3fc';
+      context.font = 'bold 10px sans-serif';
+      context.fillText('SHIELD', player.x - 18, player.y - 50);
     }
 
     context.fillStyle = '#0f172a';

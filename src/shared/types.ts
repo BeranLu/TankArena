@@ -66,6 +66,7 @@ export interface PlayerSnapshot {
   admin: boolean;
   carryingFlag: boolean;
   isKing: boolean;
+  shielded: boolean;
 }
 
 export interface ProjectileSnapshot {
