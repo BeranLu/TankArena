@@ -4,16 +4,16 @@ Run this before each staging and production release.
 
 ## Test Setup
 
-- [ ] Use latest mobile browser versions (Chrome Android, Safari iOS).
-- [ ] Test on at least 1 small phone viewport and 1 large phone viewport.
-- [ ] Clear browser cache or use private/incognito session.
-- [ ] Confirm server is reachable from mobile device on the same network.
+- [x] Use latest mobile browser versions (Chrome Android, Safari iOS).
+- [x] Test on at least 1 small phone viewport and 1 large phone viewport.
+- [x] Clear browser cache or use private/incognito session.
+- [x] Confirm server is reachable from mobile device on the same network.
 
 ## Critical Player Flow
 
-- [ ] Open game page and confirm first render is stable (no layout jumps).
-- [ ] Create or join a lobby.
-- [ ] Start a match.
+- [x] Open game page and confirm first render is stable (no layout jumps).
+- [x] Create or join a lobby.
+- [x] Start a match.
 - [ ] Move tank with touch controls.
 - [ ] Fire weapon reliably.
 - [ ] Survive until finish state or observe a full round end.
