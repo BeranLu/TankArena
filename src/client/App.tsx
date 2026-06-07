@@ -1120,46 +1120,57 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
       continue;
     }
 
+    const isDestroyed = player.health <= 0;
     const bodyScale = player.isKing ? 1.2 : 1;
     const bodyHalfWidth = 14 * bodyScale;
     const bodyHalfHeight = 10 * bodyScale;
-    context.save();
-    context.translate(player.x, player.y);
-    context.rotate(player.bodyAngle);
-    context.fillStyle = player.observer ? '#64748b' : TEAM_COLORS[player.team];
-    context.beginPath();
-    context.rect(-bodyHalfWidth, -bodyHalfHeight, bodyHalfWidth * 2, bodyHalfHeight * 2);
-    context.fill();
+    if (isDestroyed) {
+      drawDestroyedTank(context, player.x, player.y, player.bodyAngle, bodyScale);
+    } else {
+      context.save();
+      context.translate(player.x, player.y);
+      context.rotate(player.bodyAngle);
+      context.fillStyle = player.observer ? '#64748b' : TEAM_COLORS[player.team];
+      context.beginPath();
+      context.rect(-bodyHalfWidth, -bodyHalfHeight, bodyHalfWidth * 2, bodyHalfHeight * 2);
+      context.fill();
 
-    // Team-colored nose marker to make hull forward direction obvious.
-    const noseColor = player.team === 'red' ? '#ffd1d1' : player.team === 'blue' ? '#ccefff' : '#f8fafc';
-    context.fillStyle = noseColor;
-    context.beginPath();
-    context.moveTo(bodyHalfWidth - 2 * bodyScale, 0);
-    context.lineTo(bodyHalfWidth - 9 * bodyScale, -4.5 * bodyScale);
-    context.lineTo(bodyHalfWidth - 9 * bodyScale, 4.5 * bodyScale);
-    context.closePath();
-    context.fill();
+      // Team-colored nose marker to make hull forward direction obvious.
+      const noseColor = player.team === 'red' ? '#ffd1d1' : player.team === 'blue' ? '#ccefff' : '#f8fafc';
+      context.fillStyle = noseColor;
+      context.beginPath();
+      context.moveTo(bodyHalfWidth - 2 * bodyScale, 0);
+      context.lineTo(bodyHalfWidth - 9 * bodyScale, -4.5 * bodyScale);
+      context.lineTo(bodyHalfWidth - 9 * bodyScale, 4.5 * bodyScale);
+      context.closePath();
+      context.fill();
 
-    context.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    context.fillRect(-8 * bodyScale, (-14) * bodyScale, 16 * bodyScale, 4 * bodyScale);
-    context.fillRect(-8 * bodyScale, 10 * bodyScale, 16 * bodyScale, 4 * bodyScale);
-    context.restore();
+      context.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      context.fillRect(-8 * bodyScale, (-14) * bodyScale, 16 * bodyScale, 4 * bodyScale);
+      context.fillRect(-8 * bodyScale, 10 * bodyScale, 16 * bodyScale, 4 * bodyScale);
+      context.restore();
 
-    context.save();
-    context.translate(player.x, player.y);
-    context.rotate(player.turretAngle);
-    context.fillStyle = '#e2e8f0';
-    context.fillRect(-5 * bodyScale, -5 * bodyScale, 10 * bodyScale, 10 * bodyScale);
-    context.fillRect(0, -3 * bodyScale, 20 * bodyScale, 6 * bodyScale);
-    context.restore();
+      context.save();
+      context.translate(player.x, player.y);
+      context.rotate(player.turretAngle);
+      context.fillStyle = '#e2e8f0';
+      context.fillRect(-5 * bodyScale, -5 * bodyScale, 10 * bodyScale, 10 * bodyScale);
+      context.fillRect(0, -3 * bodyScale, 20 * bodyScale, 6 * bodyScale);
+      context.restore();
+    }
 
     context.fillStyle = '#e2e8f0';
     context.font = '12px sans-serif';
     context.textAlign = 'left';
     context.fillText(player.name, player.x - 18, player.y - 18);
 
-    if (player.carryingFlag) {
+    if (isDestroyed) {
+      context.fillStyle = '#f59e0b';
+      context.font = 'bold 10px sans-serif';
+      context.fillText('DESTROYED', player.x - 25, player.y - 30);
+    }
+
+    if (player.carryingFlag && !isDestroyed) {
       context.fillStyle = '#f8fafc';
       context.font = 'bold 11px sans-serif';
       context.fillText('FLAG', player.x - 15, player.y - 30);
@@ -1172,7 +1183,7 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
       context.stroke();
     }
 
-    if (player.isKing) {
+    if (player.isKing && !isDestroyed) {
       context.fillStyle = '#ffd166';
       context.font = 'bold 12px sans-serif';
       context.fillText('KING', player.x - 15, player.y - 42);
@@ -1182,7 +1193,7 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
       context.stroke();
     }
 
-    if (player.shielded) {
+    if (player.shielded && !isDestroyed) {
       context.strokeStyle = 'rgba(125, 211, 252, 0.95)';
       context.lineWidth = 2;
       context.beginPath();
@@ -1194,10 +1205,12 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
       context.fillText('SHIELD', player.x - 18, player.y - 50);
     }
 
-    context.fillStyle = '#0f172a';
-    context.fillRect(player.x - 16, player.y - 12, 32, 4);
-    context.fillStyle = player.health > 50 ? '#22c55e' : '#f97316';
-    context.fillRect(player.x - 16, player.y - 12, (32 * player.health) / player.maxHealth, 4);
+    if (!isDestroyed) {
+      context.fillStyle = '#0f172a';
+      context.fillRect(player.x - 16, player.y - 12, 32, 4);
+      context.fillStyle = player.health > 50 ? '#22c55e' : '#f97316';
+      context.fillRect(player.x - 16, player.y - 12, (32 * player.health) / player.maxHealth, 4);
+    }
   }
 
   context.restore();
@@ -1255,5 +1268,36 @@ function drawFlag(context: CanvasRenderingContext2D, x: number, y: number, color
   context.lineTo(x - 1, y + 2);
   context.closePath();
   context.fill();
+}
+
+function drawDestroyedTank(context: CanvasRenderingContext2D, x: number, y: number, bodyAngle: number, scale: number) {
+  context.save();
+  context.translate(x, y);
+  context.rotate(bodyAngle + 0.18);
+
+  const halfWidth = 14 * scale;
+  const halfHeight = 10 * scale;
+  context.fillStyle = '#374151';
+  context.fillRect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2);
+
+  context.strokeStyle = '#111827';
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(-halfWidth + 2 * scale, -halfHeight + 2 * scale);
+  context.lineTo(halfWidth - 3 * scale, halfHeight - 2 * scale);
+  context.moveTo(-halfWidth + 3 * scale, halfHeight - 3 * scale);
+  context.lineTo(halfWidth - 2 * scale, -halfHeight + 3 * scale);
+  context.stroke();
+
+  context.fillStyle = '#0f172a';
+  context.fillRect(-8 * scale, -14 * scale, 16 * scale, 4 * scale);
+  context.fillRect(-8 * scale, 10 * scale, 16 * scale, 4 * scale);
+
+  context.rotate(-0.55);
+  context.fillStyle = '#6b7280';
+  context.fillRect(-5 * scale, -5 * scale, 10 * scale, 10 * scale);
+  context.fillRect(-2 * scale, -2 * scale, 12 * scale, 4 * scale);
+
+  context.restore();
 }
 
