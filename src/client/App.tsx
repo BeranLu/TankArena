@@ -16,6 +16,13 @@ const TEAM_COLORS: Record<TeamId, string> = {
   observer: '#a8b3c7',
 };
 
+const TEAM_LABELS: Record<TeamId, string> = {
+  red: 'Red',
+  blue: 'Blue',
+  none: 'Unassigned',
+  observer: 'Observer',
+};
+
 const DEFAULT_INPUT: PlayerInput = {
   up: false,
   down: false,
@@ -204,6 +211,11 @@ export default function App() {
     nextSocket.on('snapshot', (nextSnapshot) => {
       snapshotRef.current = nextSnapshot;
       latestSnapshotForUiRef.current = nextSnapshot;
+
+      const localPlayer = nextSnapshot.players.find((player) => player.id === nextSocket.id);
+      if (localPlayer) {
+        setObserver(localPlayer.observer);
+      }
 
       const now = Date.now();
       const elapsed = now - lastUiSnapshotPushAtRef.current;
@@ -842,7 +854,10 @@ export default function App() {
               {sortedPlayers.map((player) => (
                 <li key={player.id}>
                   <span className="dot" style={{ background: TEAM_COLORS[player.team] }} />
-                  <span>{player.name}{player.isBot ? ' [BOT]' : ''}</span>
+                  <span className="playerIdentity">
+                    <strong>{player.name}{player.isBot ? ' [BOT]' : ''}{player.id === socket?.id ? ' (you)' : ''}</strong>
+                     <small>{player.observer ? 'Observer' : `Team ${TEAM_LABELS[player.team]}`}</small>
+                  </span>
                   <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isLobby ? (player.ready ? 'ready' : 'waiting') : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
                 </li>
               ))}
@@ -1082,6 +1097,10 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
   }
 
   for (const player of snapshot.players) {
+    if (player.observer) {
+      continue;
+    }
+
     const bodyScale = player.isKing ? 1.2 : 1;
     const bodyHalfWidth = 14 * bodyScale;
     const bodyHalfHeight = 10 * bodyScale;
