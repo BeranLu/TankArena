@@ -2,6 +2,8 @@
 
 Run this before each staging and production release.
 
+Latest validation: completed on 2026-06-07 with all checklist items passing.
+
 ## Test Setup
 
 - [x] Use latest mobile browser versions (Chrome Android, Safari iOS).

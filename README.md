@@ -164,6 +164,13 @@ After DNS points to the VM IP and certificates are valid, players can join over 
 - Late joiners are added as observers while a match is running.
 - The current implementation is a playable foundation. Capture the flag and protect the king are wired as supported game modes and can be expanded next.
 
+## Known Issues
+
+- Mobile controls are still being tuned for device-specific sensitivity and thumb comfort.
+- In some mobile landscape combinations, arena fit may vary slightly by browser UI chrome and safe-area behavior.
+- Bot behavior can occasionally look passive in Team Deathmatch and is under active tuning.
+- Control mode preference (joystick/buttons/arena sticks) is currently session-based and may reset on reload.
+
 ## Donations
 
 If you already have Stripe and Buy Me a Coffee set up, add your links to `.env`:

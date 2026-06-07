@@ -21,10 +21,10 @@ Goal: keep public build stable and remove the most visible rough edges.
   - [x] Responsive lobby layout for common phone sizes.
   - [x] Touch-friendly controls and button hit areas.
   - [x] Prevent text clipping/overflow in key HUD and admin panels.
-  - [ ] Validate baseline on staging with MOBILE-QA-CHECKLIST.md.
-- [ ] (S) Add a post-deploy smoke checklist (create lobby, add bot, start round, join observer).
-- [ ] (S) Add trailer capture checklist and lock safer capture defaults (no countdown/static starts).
-- [ ] (S) Add Known Issues section to README for player-facing transparency.
+  - [x] Validate baseline on staging with MOBILE-QA-CHECKLIST.md.
+- [x] (S) Add a post-deploy smoke checklist (create lobby, add bot, start round, join observer).
+- [x] (S) Add trailer capture checklist and lock safer capture defaults (no countdown/static starts).
+- [x] (S) Add Known Issues section to README for player-facing transparency.
 
 Milestone exit criteria:
 - One pass of smoke checks succeeds on staging and production.
@@ -71,8 +71,8 @@ Goal: reduce regressions and improve release confidence.
 - [ ] (S) Add end-of-round telemetry payload for balancing review.
 - [ ] (M) Add CI workflow for typecheck + tests on push and PR.
 - [ ] (M) Split tests into fast and full suites.
-- [ ] (S) Add release checklist for staging -> production flow.
-- [ ] (S) Add CHANGELOG baseline and future release template.
+- [x] (S) Add release checklist for staging -> production flow.
+- [x] (S) Add CHANGELOG baseline and future release template.
 
 Milestone exit criteria:
 - CI blocks merges on failing checks.
