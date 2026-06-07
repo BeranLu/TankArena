@@ -1202,23 +1202,27 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
   context.strokeStyle = 'rgba(143, 210, 255, 0.75)';
   context.lineWidth = 2;
   context.strokeRect(
-    viewport.offsetX + 1,
-    viewport.offsetY + 1,
-    viewport.pixelWidth - 2,
-    viewport.pixelHeight - 2,
+    viewport.offsetX,
+    viewport.offsetY,
+    viewport.pixelWidth,
+    viewport.pixelHeight,
   );
 }
 
+const ARENA_INSET = 6; // CSS pixels — guarantees border is always visible inside canvas edge
+
 function getMapViewport(mapWidth: number, mapHeight: number, viewportWidth: number, viewportHeight: number) {
-  const scale = Math.min(viewportWidth / mapWidth, viewportHeight / mapHeight);
+  const availW = viewportWidth - ARENA_INSET * 2;
+  const availH = viewportHeight - ARENA_INSET * 2;
+  const scale = Math.min(availW / mapWidth, availH / mapHeight);
   const pixelWidth = mapWidth * scale;
   const pixelHeight = mapHeight * scale;
   return {
     scale,
     pixelWidth,
     pixelHeight,
-    offsetX: (viewportWidth - pixelWidth) / 2,
-    offsetY: (viewportHeight - pixelHeight) / 2,
+    offsetX: ARENA_INSET + (availW - pixelWidth) / 2,
+    offsetY: ARENA_INSET + (availH - pixelHeight) / 2,
   };
 }
 
