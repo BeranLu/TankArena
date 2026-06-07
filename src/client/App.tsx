@@ -16,6 +16,13 @@ const TEAM_COLORS: Record<TeamId, string> = {
   observer: '#a8b3c7',
 };
 
+const TEAM_LABELS: Record<TeamId, string> = {
+  red: 'Red',
+  blue: 'Blue',
+  none: 'Unassigned',
+  observer: 'Observer',
+};
+
 const DEFAULT_INPUT: PlayerInput = {
   up: false,
   down: false,
@@ -205,6 +212,11 @@ export default function App() {
       snapshotRef.current = nextSnapshot;
       latestSnapshotForUiRef.current = nextSnapshot;
 
+      const localPlayer = nextSnapshot.players.find((player) => player.id === nextSocket.id);
+      if (localPlayer) {
+        setObserver(localPlayer.observer);
+      }
+
       const now = Date.now();
       const elapsed = now - lastUiSnapshotPushAtRef.current;
       if (elapsed >= UI_SNAPSHOT_INTERVAL_MS) {
@@ -362,6 +374,17 @@ export default function App() {
   const isFinished = snapshot?.phase === 'finished';
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
+  const localPlayer = useMemo(() => {
+    if (!snapshot || !socket) {
+      return null;
+    }
+    return snapshot.players.find((player) => player.id === socket.id) ?? null;
+  }, [snapshot, socket]);
+  const localReadyLabel = observer
+    ? 'Observer'
+    : localPlayer?.ready
+      ? 'Ready'
+      : 'Not ready';
   const transferablePlayers = useMemo(() => {
     if (!snapshot) {
       return [];
@@ -768,21 +791,6 @@ export default function App() {
 
       {joined ? <main className="layout">
         <section className="panel gamePanel">
-          <div className="panelHeader">
-            <div>
-              <h2>{snapshot?.map.name ?? 'Arena'}</h2>
-              <p>{snapshot ? MODES[snapshot.mode] : 'Waiting for the server...'}</p>
-            </div>
-            <div className="controlsRow wrap">
-              <button type="button" onClick={() => ready(true)} disabled={!joined || observer}>
-                Ready
-              </button>
-              <button type="button" onClick={() => ready(false)} disabled={!joined || observer}>
-                Unready
-              </button>
-            </div>
-          </div>
-
           <canvas ref={canvasRef} className="arenaCanvas" width={960} height={640} />
 
           {isFinished && snapshot?.roundResult ? (
@@ -835,13 +843,36 @@ export default function App() {
               <div><span>Red</span><strong>{formatTeamScore(snapshot?.score.red ?? 0)}</strong></div>
               <div><span>Blue</span><strong>{formatTeamScore(snapshot?.score.blue ?? 0)}</strong></div>
               <div><span>Objective</span><strong>{activeTargetLabel}</strong></div>
+              <div><span>Map</span><strong>{snapshot?.map.name ?? '-'}</strong></div>
+              <div><span>Game type</span><strong>{snapshot ? MODES[snapshot.mode] : '-'}</strong></div>
             </div>
+            <div className="controlsRow wrap">
+              <button type="button" onClick={() => ready(true)} disabled={!joined || observer || !!localPlayer?.ready}>
+                Set Ready
+              </button>
+              <button type="button" onClick={() => ready(false)} disabled={!joined || observer || !localPlayer?.ready}>
+                Set Unready
+              </button>
+            </div>
+            <p className={`readyStatus ${localPlayer?.ready ? 'readyStatusReady' : 'readyStatusWaiting'}`}>
+              Your status: {localReadyLabel}
+            </p>
             <ul className="playerList">
               {sortedPlayers.map((player) => (
                 <li key={player.id}>
-                  <span className="dot" style={{ background: TEAM_COLORS[player.team] }} />
-                  <span>{player.name}{player.isBot ? ' [BOT]' : ''}</span>
-                  <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
+                  <span
+                    className="dot"
+                    style={{
+                      background: isLobby
+                        ? (player.ready ? '#22c55e' : '#9ca3af')
+                        : TEAM_COLORS[player.team],
+                    }}
+                  />
+                  <span className="playerIdentity">
+                    <strong>{player.name}{player.isBot ? ' [BOT]' : ''}{player.id === socket?.id ? ' (you)' : ''}</strong>
+                     <small>{player.observer ? 'Observer' : `Team ${TEAM_LABELS[player.team]}`}</small>
+                  </span>
+                  <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isLobby ? (player.ready ? 'ready' : 'waiting') : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
                 </li>
               ))}
             </ul>
@@ -851,123 +882,154 @@ export default function App() {
             <div className="panelHeader compact">
               <h2>Admin Console</h2>
             </div>
-            <label className="field">
-              <span>Transfer admin to</span>
-              <select value={adminTargetPlayerId} onChange={(event) => setAdminTargetPlayerId(event.target.value)}>
-                {transferablePlayers.length === 0 ? <option value="">No eligible players</option> : null}
-                {transferablePlayers.map((player) => (
-                  <option key={player.id} value={player.id}>{player.name}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Kick player</span>
-              <select value={kickTargetPlayerId} onChange={(event) => setKickTargetPlayerId(event.target.value)}>
-                {kickablePlayers.length === 0 ? <option value="">No players to kick</option> : null}
-                {kickablePlayers.map((player) => (
-                  <option key={player.id} value={player.id}>{player.name}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Game type</span>
-              <select value={adminMode} onChange={(event) => setAdminMode(event.target.value as GameMode)}>
-                <option value="deathmatch">Team Deathmatch</option>
-                <option value="capture-the-flag">Capture the Flag</option>
-                <option value="protect-the-king">Protect the King</option>
-                <option value="control-points">Control Points</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Map</span>
-              <select value={adminMap} onChange={(event) => setAdminMap(event.target.value)}>
-                <option value="cargo-yard">Cargo Yard</option>
-                <option value="iron-pass">Iron Pass</option>
-                <option value="dune-stronghold">Dune Stronghold</option>
-                <option value="frostline">Frostline</option>
-                <option value="reactor-ridge">Reactor Ridge</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Team Deathmatch target points</span>
-              <input
-                type="number"
-                min={1}
-                max={200}
-                step={1}
-                value={adminSettings.deathmatchTarget}
-                onChange={(event) => {
-                  const next = Number.parseInt(event.target.value, 10);
-                  setAdminSettings((current) => ({
-                    ...current,
-                    deathmatchTarget: Number.isFinite(next) ? next : current.deathmatchTarget,
-                  }));
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Capture the Flag target captures</span>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                step={1}
-                value={adminSettings.ctfTarget}
-                onChange={(event) => {
-                  const next = Number.parseInt(event.target.value, 10);
-                  setAdminSettings((current) => ({
-                    ...current,
-                    ctfTarget: Number.isFinite(next) ? next : current.ctfTarget,
-                  }));
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Protect the King king health</span>
-              <input
-                type="number"
-                min={100}
-                max={5000}
-                step={10}
-                value={adminSettings.kingHealth}
-                onChange={(event) => {
-                  const next = Number.parseInt(event.target.value, 10);
-                  setAdminSettings((current) => ({
-                    ...current,
-                    kingHealth: Number.isFinite(next) ? next : current.kingHealth,
-                  }));
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Control Points reinforcements</span>
-              <input
-                type="number"
-                min={50}
-                max={2000}
-                step={10}
-                value={adminSettings.controlPointsReinforcements}
-                onChange={(event) => {
-                  const next = Number.parseInt(event.target.value, 10);
-                  setAdminSettings((current) => ({
-                    ...current,
-                    controlPointsReinforcements: Number.isFinite(next) ? next : current.controlPointsReinforcements,
-                  }));
-                }}
-              />
-            </label>
-            <div className="controlsRow wrap">
-              <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isLobby}>Apply mode</button>
-              <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isLobby}>Apply map</button>
-              <button type="button" onClick={applyModeSettings} disabled={!isLobby}>Apply settings</button>
-              <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!adminTargetPlayerId}>Pass admin</button>
-              <button type="button" onClick={() => socket?.emit('kickPlayer', { playerId: kickTargetPlayerId })} disabled={!kickTargetPlayerId}>Kick player</button>
-              <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isLobby}>+ Bot</button>
-              <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isLobby}>- Bot</button>
-              <button type="button" onClick={startMatch} disabled={!isLobby}>Start</button>
-              <button type="button" onClick={togglePause} disabled={!canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
-              <button type="button" onClick={resetLobby}>Stop to lobby</button>
-            </div>
+
+            <details className="adminAccordion" open>
+              <summary>Lobby control</summary>
+              <div className="adminAccordionBody">
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={() => socket?.emit('addBot')} disabled={!isLobby}>+ Bot</button>
+                  <button type="button" onClick={() => socket?.emit('removeBot')} disabled={!isLobby}>- Bot</button>
+                  <button type="button" onClick={startMatch} disabled={!isLobby}>Start</button>
+                  <button type="button" onClick={togglePause} disabled={!canPause}>{snapshot?.phase === 'paused' ? 'Resume' : 'Pause'}</button>
+                  <button type="button" onClick={resetLobby}>Stop to lobby</button>
+                </div>
+              </div>
+            </details>
+
+            <details className="adminAccordion">
+              <summary>Mode and map</summary>
+              <div className="adminAccordionBody">
+                <label className="field">
+                  <span>Game type</span>
+                  <select value={adminMode} onChange={(event) => setAdminMode(event.target.value as GameMode)}>
+                    <option value="deathmatch">Team Deathmatch</option>
+                    <option value="capture-the-flag">Capture the Flag</option>
+                    <option value="protect-the-king">Protect the King</option>
+                    <option value="control-points">Control Points</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Map</span>
+                  <select value={adminMap} onChange={(event) => setAdminMap(event.target.value)}>
+                    <option value="cargo-yard">Cargo Yard</option>
+                    <option value="iron-pass">Iron Pass</option>
+                    <option value="dune-stronghold">Dune Stronghold</option>
+                    <option value="frostline">Frostline</option>
+                    <option value="reactor-ridge">Reactor Ridge</option>
+                  </select>
+                </label>
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={() => socket?.emit('setMode', adminMode)} disabled={!isLobby}>Apply mode</button>
+                  <button type="button" onClick={() => socket?.emit('setMap', adminMap)} disabled={!isLobby}>Apply map</button>
+                </div>
+              </div>
+            </details>
+
+            <details className="adminAccordion">
+              <summary>Mode settings</summary>
+              <div className="adminAccordionBody">
+                <label className="field">
+                  <span>Team Deathmatch target points</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    step={1}
+                    value={adminSettings.deathmatchTarget}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setAdminSettings((current) => ({
+                        ...current,
+                        deathmatchTarget: Number.isFinite(next) ? next : current.deathmatchTarget,
+                      }));
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Capture the Flag target captures</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    step={1}
+                    value={adminSettings.ctfTarget}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setAdminSettings((current) => ({
+                        ...current,
+                        ctfTarget: Number.isFinite(next) ? next : current.ctfTarget,
+                      }));
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Protect the King king health</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={5000}
+                    step={10}
+                    value={adminSettings.kingHealth}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setAdminSettings((current) => ({
+                        ...current,
+                        kingHealth: Number.isFinite(next) ? next : current.kingHealth,
+                      }));
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Control Points reinforcements</span>
+                  <input
+                    type="number"
+                    min={50}
+                    max={2000}
+                    step={10}
+                    value={adminSettings.controlPointsReinforcements}
+                    onChange={(event) => {
+                      const next = Number.parseInt(event.target.value, 10);
+                      setAdminSettings((current) => ({
+                        ...current,
+                        controlPointsReinforcements: Number.isFinite(next) ? next : current.controlPointsReinforcements,
+                      }));
+                    }}
+                  />
+                </label>
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={applyModeSettings} disabled={!isLobby}>Apply settings</button>
+                </div>
+              </div>
+            </details>
+
+            <details className="adminAccordion">
+              <summary>Moderation</summary>
+              <div className="adminAccordionBody">
+                <label className="field">
+                  <span>Transfer admin to</span>
+                  <select value={adminTargetPlayerId} onChange={(event) => setAdminTargetPlayerId(event.target.value)}>
+                    {transferablePlayers.length === 0 ? <option value="">No eligible players</option> : null}
+                    {transferablePlayers.map((player) => (
+                      <option key={player.id} value={player.id}>{player.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Kick player</span>
+                  <select value={kickTargetPlayerId} onChange={(event) => setKickTargetPlayerId(event.target.value)}>
+                    {kickablePlayers.length === 0 ? <option value="">No players to kick</option> : null}
+                    {kickablePlayers.map((player) => (
+                      <option key={player.id} value={player.id}>{player.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!adminTargetPlayerId}>Pass admin</button>
+                  <button type="button" onClick={() => socket?.emit('kickPlayer', { playerId: kickTargetPlayerId })} disabled={!kickTargetPlayerId}>Kick player</button>
+                </div>
+              </div>
+            </details>
+
             <p className="adminTip">To change map or game type during a match: click Stop to lobby, apply mode/map, then Start.</p>
           </section> : null}
         </aside>
@@ -1049,6 +1111,10 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
   }
 
   for (const player of snapshot.players) {
+    if (player.observer) {
+      continue;
+    }
+
     const bodyScale = player.isKing ? 1.2 : 1;
     const bodyHalfWidth = 14 * bodyScale;
     const bodyHalfHeight = 10 * bodyScale;
