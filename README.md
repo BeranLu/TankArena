@@ -163,6 +163,38 @@ Implementation details:
 - If only one link is provided, only that provider button is shown.
 - The links are client-side only and open in a new tab.
 
+## Traffic Analytics
+
+You can add privacy-friendly traffic analytics on Render by setting a script URL and one provider attribute in `.env`.
+
+For direct Google Analytics 4 support, set your Measurement ID:
+
+```env
+VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX
+```
+
+GA4 is loaded directly by the client, so no Google Tag Manager container is required.
+
+Examples:
+
+```env
+# Plausible
+VITE_ANALYTICS_SCRIPT_URL=https://plausible.io/js/script.js
+VITE_ANALYTICS_ATTR_NAME=data-domain
+VITE_ANALYTICS_ATTR_VALUE=shellstorm.online
+
+# Umami
+VITE_ANALYTICS_SCRIPT_URL=https://analytics.umami.is/script.js
+VITE_ANALYTICS_ATTR_NAME=data-website-id
+VITE_ANALYTICS_ATTR_VALUE=your-website-id
+```
+
+Notes:
+
+- These variables are baked into the client bundle, so redeploy after changing them on Render.
+- The script only loads when `VITE_ANALYTICS_SCRIPT_URL` is set.
+- The app does not send analytics unless you configure a provider.
+
 ## License
 
 This project is available for non-commercial use.

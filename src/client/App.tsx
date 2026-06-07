@@ -37,12 +37,20 @@ type AppEnv = {
   VITE_SUPPORT_URL?: string;
   VITE_BUYMEACOFFEE_URL?: string;
   VITE_STRIPE_DONATE_URL?: string;
+  VITE_GA_MEASUREMENT_ID?: string;
+  VITE_ANALYTICS_SCRIPT_URL?: string;
+  VITE_ANALYTICS_ATTR_NAME?: string;
+  VITE_ANALYTICS_ATTR_VALUE?: string;
 };
 
 const appEnv = ((import.meta as { env?: AppEnv }).env ?? {}) as AppEnv;
 const BUY_ME_A_COFFEE_URL = (appEnv.VITE_BUYMEACOFFEE_URL?.trim() ?? appEnv.VITE_SUPPORT_URL?.trim() ?? '');
 const STRIPE_DONATE_URL = appEnv.VITE_STRIPE_DONATE_URL?.trim() ?? '';
 const HAS_SUPPORT_LINKS = Boolean(BUY_ME_A_COFFEE_URL || STRIPE_DONATE_URL);
+const GA_MEASUREMENT_ID = appEnv.VITE_GA_MEASUREMENT_ID?.trim() ?? '';
+const ANALYTICS_SCRIPT_URL = appEnv.VITE_ANALYTICS_SCRIPT_URL?.trim() ?? '';
+const ANALYTICS_ATTR_NAME = appEnv.VITE_ANALYTICS_ATTR_NAME?.trim() ?? '';
+const ANALYTICS_ATTR_VALUE = appEnv.VITE_ANALYTICS_ATTR_VALUE?.trim() ?? '';
 const UI_SNAPSHOT_INTERVAL_MS = 100;
 
 function getOrCreateClientKey() {
@@ -98,6 +106,47 @@ export default function App() {
   useEffect(() => {
     observerRef.current = observer;
   }, [observer]);
+
+  useEffect(() => {
+    if (GA_MEASUREMENT_ID) {
+      const externalScript = document.createElement('script');
+      externalScript.async = true;
+      externalScript.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(GA_MEASUREMENT_ID)}`;
+
+      const inlineScript = document.createElement('script');
+      inlineScript.textContent = `
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){window.dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', ${JSON.stringify(GA_MEASUREMENT_ID)});
+      `;
+
+      document.head.appendChild(externalScript);
+      document.head.appendChild(inlineScript);
+
+      return () => {
+        externalScript.remove();
+        inlineScript.remove();
+      };
+    }
+
+    if (!ANALYTICS_SCRIPT_URL) {
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.async = true;
+    script.defer = true;
+    script.src = ANALYTICS_SCRIPT_URL;
+    if (ANALYTICS_ATTR_NAME && ANALYTICS_ATTR_VALUE) {
+      script.setAttribute(ANALYTICS_ATTR_NAME, ANALYTICS_ATTR_VALUE);
+    }
+    document.head.appendChild(script);
+
+    return () => {
+      script.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const nextSocket = io();
