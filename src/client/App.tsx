@@ -28,6 +28,8 @@ const DEFAULT_INPUT: PlayerInput = {
   down: false,
   left: false,
   right: false,
+  moveAxis: undefined,
+  turnAxis: undefined,
   fire: false,
   aimX: 0,
   aimY: 0,
@@ -519,6 +521,8 @@ export default function App() {
   }
 
   function setMovementFlags(next: Pick<PlayerInput, 'up' | 'down' | 'left' | 'right'>) {
+    inputRef.current.moveAxis = undefined;
+    inputRef.current.turnAxis = undefined;
     const keys: Array<'up' | 'down' | 'left' | 'right'> = ['up', 'down', 'left', 'right'];
     let changed = false;
     for (const key of keys) {
@@ -532,9 +536,42 @@ export default function App() {
     }
   }
 
+  function setAnalogMovement(turnAxis: number, moveAxis: number) {
+    const clampedTurn = clamp(turnAxis, -1, 1);
+    const clampedMove = clamp(moveAxis, -1, 1);
+    const derived = {
+      up: clampedMove > JOYSTICK_DEADZONE,
+      down: clampedMove < -JOYSTICK_DEADZONE,
+      left: clampedTurn < -JOYSTICK_DEADZONE,
+      right: clampedTurn > JOYSTICK_DEADZONE,
+    };
+
+    const changed =
+      inputRef.current.turnAxis !== clampedTurn
+      || inputRef.current.moveAxis !== clampedMove
+      || inputRef.current.up !== derived.up
+      || inputRef.current.down !== derived.down
+      || inputRef.current.left !== derived.left
+      || inputRef.current.right !== derived.right;
+
+    inputRef.current.turnAxis = clampedTurn;
+    inputRef.current.moveAxis = clampedMove;
+    inputRef.current.up = derived.up;
+    inputRef.current.down = derived.down;
+    inputRef.current.left = derived.left;
+    inputRef.current.right = derived.right;
+
+    if (changed) {
+      pushInput();
+    }
+  }
+
   function resetJoystickMovement() {
     joystickPointerIdRef.current = null;
     setJoystickVisual({ active: false, x: 0, y: 0 });
+    setAnalogMovement(0, 0);
+    inputRef.current.turnAxis = undefined;
+    inputRef.current.moveAxis = undefined;
     setMovementFlags({ up: false, down: false, left: false, right: false });
   }
 
@@ -562,16 +599,11 @@ export default function App() {
     const ny = y / JOYSTICK_MAX_OFFSET;
     const magnitude = Math.hypot(nx, ny);
     if (magnitude < JOYSTICK_DEADZONE) {
-      setMovementFlags({ up: false, down: false, left: false, right: false });
+      setAnalogMovement(0, 0);
       return;
     }
 
-    setMovementFlags({
-      up: ny < -JOYSTICK_DEADZONE,
-      down: ny > JOYSTICK_DEADZONE,
-      left: nx < -JOYSTICK_DEADZONE,
-      right: nx > JOYSTICK_DEADZONE,
-    });
+    setAnalogMovement(nx, -ny);
   }
 
   function updateAimJoystickFromPoint(clientX: number, clientY: number, element: HTMLDivElement) {

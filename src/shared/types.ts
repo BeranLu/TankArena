@@ -60,6 +60,8 @@ export interface PlayerInput {
   down: boolean;
   left: boolean;
   right: boolean;
+  moveAxis?: number;
+  turnAxis?: number;
   fire: boolean;
   aimX: number;
   aimY: number;

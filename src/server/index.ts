@@ -1127,7 +1127,9 @@ function gameLoop() {
 
     const deltaSeconds = TICK_MS / 1000;
 
-    const turnInput = (player.input.right ? 1 : 0) - (player.input.left ? 1 : 0);
+    const turnInput = Number.isFinite(player.input.turnAxis)
+      ? clamp(player.input.turnAxis as number, -1, 1)
+      : (player.input.right ? 1 : 0) - (player.input.left ? 1 : 0);
     if (turnInput !== 0) {
       player.bodyAngle = wrapAngle(player.bodyAngle + turnInput * HULL_TURN_SPEED * deltaSeconds);
     }
@@ -1138,11 +1140,18 @@ function gameLoop() {
     }
 
     let speed = 0;
-    if (player.input.up) {
-      speed += PLAYER_SPEED;
-    }
-    if (player.input.down) {
-      speed -= PLAYER_SPEED * REVERSE_SPEED_MULTIPLIER;
+    if (Number.isFinite(player.input.moveAxis)) {
+      const axis = clamp(player.input.moveAxis as number, -1, 1);
+      speed = axis >= 0
+        ? axis * PLAYER_SPEED
+        : axis * PLAYER_SPEED * REVERSE_SPEED_MULTIPLIER;
+    } else {
+      if (player.input.up) {
+        speed += PLAYER_SPEED;
+      }
+      if (player.input.down) {
+        speed -= PLAYER_SPEED * REVERSE_SPEED_MULTIPLIER;
+      }
     }
     if (speed !== 0) {
       movePlayer(player, Math.cos(player.bodyAngle) * speed * deltaSeconds, Math.sin(player.bodyAngle) * speed * deltaSeconds);
