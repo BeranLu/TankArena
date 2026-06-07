@@ -191,6 +191,8 @@ Set these optional environment variables:
 ```env
 VITE_FEEDBACK_URL=https://your-feedback-form-url
 VITE_BUG_REPORT_URL=https://github.com/your-org/your-repo/issues/new
+GITHUB_ISSUES_REPO=your-org/your-repo
+GITHUB_ISSUES_TOKEN=github_pat_xxx
 ```
 
 Behavior:
@@ -198,7 +200,8 @@ Behavior:
 - `VITE_FEEDBACK_URL` adds a feedback icon link.
 - `VITE_BUG_REPORT_URL` adds a bug icon that opens an in-app report form.
 - The bug form auto-captures useful runtime context (map, mode, phase, lobby, browser, URL, and timestamp).
-- "Open issue draft" opens a prefilled GitHub issue with title, severity, reproduction steps, expected result, and embedded JSON context.
+- "Submit report" posts to the backend endpoint and creates a GitHub issue directly when `GITHUB_ISSUES_REPO` and `GITHUB_ISSUES_TOKEN` are configured.
+- "Open issue draft" remains available as a fallback with a prefilled issue form.
 - "Copy report JSON" copies the full structured payload for pasting into any tracker.
 
 ## Traffic Analytics

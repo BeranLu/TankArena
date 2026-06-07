@@ -110,10 +110,147 @@ const MAX_TOTAL_PLAYERS = parseLimit(process.env.MAX_TOTAL_PLAYERS, 40);
 const EMPTY_LOBBY_GRACE_MS = parseLimit(process.env.EMPTY_LOBBY_GRACE_MS, 45000);
 const RECONNECT_GRACE_MS = parseLimit(process.env.RECONNECT_GRACE_MS, 25000);
 const REDIS_URL = (process.env.REDIS_URL ?? '').trim();
+const GITHUB_ISSUES_TOKEN = (process.env.GITHUB_ISSUES_TOKEN ?? '').trim();
+const GITHUB_ISSUES_REPO = (process.env.GITHUB_ISSUES_REPO ?? '').trim();
 const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
+type UserReportSeverity = 'low' | 'medium' | 'high';
+type UserReportPayload = {
+  title: string;
+  severity: UserReportSeverity;
+  steps: string;
+  expected: string;
+  generatedAt: string;
+  pageUrl: string;
+  browser: string;
+  language: string;
+  timezone: string;
+  joined: boolean;
+  observer: boolean;
+  lobbyId: string | null;
+  lobbyName: string | null;
+  mode: string;
+  mapId: string | null;
+  mapName: string | null;
+  phase: string;
+  activePlayers: number | null;
+  connectedClients: number | null;
+  scoreboard: { red: number; blue: number } | null;
+};
+
 const app = express();
+app.use(express.json({ limit: '200kb' }));
+
+const reportRateLimit = new Map<string, number[]>();
+
+app.post('/api/report-bug', async (request, response) => {
+  const ip = (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+    ?? request.socket.remoteAddress
+    ?? 'unknown';
+  const now = Date.now();
+  const recent = (reportRateLimit.get(ip) ?? []).filter((time) => now - time < 10 * 60 * 1000);
+  if (recent.length >= 6) {
+    response.status(429).json({ error: 'Too many reports from this IP. Please try again later.' });
+    return;
+  }
+  recent.push(now);
+  reportRateLimit.set(ip, recent);
+
+  const payload = request.body as Partial<UserReportPayload> | undefined;
+  const title = (payload?.title ?? '').toString().trim();
+  const steps = (payload?.steps ?? '').toString().trim();
+  const expected = (payload?.expected ?? '').toString().trim();
+  const severity = payload?.severity === 'low' || payload?.severity === 'high' ? payload.severity : 'medium';
+
+  if (!title || !steps) {
+    response.status(400).json({ error: 'Title and steps are required.' });
+    return;
+  }
+
+  if (!GITHUB_ISSUES_TOKEN || !GITHUB_ISSUES_REPO.includes('/')) {
+    response.status(503).json({ error: 'Server bug reporting is not configured yet.' });
+    return;
+  }
+
+  const safePayload: UserReportPayload = {
+    title: title.slice(0, 120),
+    severity,
+    steps: steps.slice(0, 4000),
+    expected: expected.slice(0, 2000),
+    generatedAt: (payload?.generatedAt ?? new Date().toISOString()).toString().slice(0, 64),
+    pageUrl: (payload?.pageUrl ?? '').toString().slice(0, 500),
+    browser: (payload?.browser ?? '').toString().slice(0, 700),
+    language: (payload?.language ?? '').toString().slice(0, 64),
+    timezone: (payload?.timezone ?? '').toString().slice(0, 128),
+    joined: Boolean(payload?.joined),
+    observer: Boolean(payload?.observer),
+    lobbyId: payload?.lobbyId ? payload.lobbyId.toString().slice(0, 120) : null,
+    lobbyName: payload?.lobbyName ? payload.lobbyName.toString().slice(0, 120) : null,
+    mode: (payload?.mode ?? 'none').toString().slice(0, 64),
+    mapId: payload?.mapId ? payload.mapId.toString().slice(0, 120) : null,
+    mapName: payload?.mapName ? payload.mapName.toString().slice(0, 120) : null,
+    phase: (payload?.phase ?? 'none').toString().slice(0, 64),
+    activePlayers: Number.isFinite(payload?.activePlayers) ? Number(payload?.activePlayers) : null,
+    connectedClients: Number.isFinite(payload?.connectedClients) ? Number(payload?.connectedClients) : null,
+    scoreboard: payload?.scoreboard
+      && Number.isFinite(payload.scoreboard.red)
+      && Number.isFinite(payload.scoreboard.blue)
+      ? { red: Number(payload.scoreboard.red), blue: Number(payload.scoreboard.blue) }
+      : null,
+  };
+
+  const [owner, repo] = GITHUB_ISSUES_REPO.split('/');
+  const issueBody = [
+    '## Summary',
+    safePayload.title,
+    '',
+    '## Severity',
+    safePayload.severity,
+    '',
+    '## Steps To Reproduce',
+    safePayload.steps,
+    '',
+    '## Expected Result',
+    safePayload.expected || '(not provided)',
+    '',
+    '## Auto-Captured Context',
+    '```json',
+    JSON.stringify(safePayload, null, 2),
+    '```',
+  ].join('\n');
+
+  try {
+    const ghResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GITHUB_ISSUES_TOKEN}`,
+        'User-Agent': 'shellstorm-server',
+        'Accept': 'application/vnd.github+json',
+      },
+      body: JSON.stringify({
+        title: `[User Report] ${safePayload.title}`,
+        body: issueBody,
+        labels: ['bug', 'user-report'],
+      }),
+    });
+
+    if (!ghResponse.ok) {
+      const text = await ghResponse.text();
+      console.error('GitHub issue creation failed:', ghResponse.status, text);
+      response.status(502).json({ error: 'Could not create GitHub issue.' });
+      return;
+    }
+
+    const created = await ghResponse.json() as { html_url?: string; number?: number };
+    response.status(201).json({ ok: true, issueUrl: created.html_url ?? '', issueNumber: created.number ?? null });
+  } catch (error) {
+    console.error('Bug report endpoint failure:', error);
+    response.status(500).json({ error: 'Unexpected error while creating issue.' });
+  }
+});
+
 const server = http.createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: { origin: true, credentials: true },

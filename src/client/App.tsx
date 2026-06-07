@@ -120,6 +120,7 @@ export default function App() {
   const [reportExpected, setReportExpected] = useState('');
   const [reportSeverity, setReportSeverity] = useState<UserReportSeverity>('medium');
   const [reportStatus, setReportStatus] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<GameSnapshot | null>(null);
@@ -461,10 +462,12 @@ export default function App() {
       return;
     }
     const rect = canvasRef.current.getBoundingClientRect();
-    const normalizedX = (clientX - rect.left) / rect.width;
-    const normalizedY = (clientY - rect.top) / rect.height;
-    inputRef.current.aimX = normalizedX * snapshotRef.current.map.width;
-    inputRef.current.aimY = normalizedY * snapshotRef.current.map.height;
+    const map = snapshotRef.current.map;
+    const viewport = getMapViewport(map.width, map.height, rect.width, rect.height);
+    const localX = clientX - rect.left - viewport.offsetX;
+    const localY = clientY - rect.top - viewport.offsetY;
+    inputRef.current.aimX = clamp(localX / viewport.scale, 0, map.width);
+    inputRef.current.aimY = clamp(localY / viewport.scale, 0, map.height);
     pushInput();
   }
 
@@ -533,6 +536,45 @@ export default function App() {
       setReportStatus('Report JSON copied to clipboard.');
     } catch {
       setReportStatus('Could not access clipboard.');
+    }
+  }
+
+  async function submitReportDirectly() {
+    if (!reportTitle.trim() || !reportSteps.trim()) {
+      setReportStatus('Please fill at least title and steps to reproduce.');
+      return;
+    }
+
+    const payload = buildReportPayload();
+    setReportSubmitting(true);
+    setReportStatus('');
+    try {
+      const response = await fetch('/api/report-bug', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({} as { error?: string }));
+        setReportStatus(body.error ?? 'Failed to submit report.');
+        return;
+      }
+
+      const data = await response.json().catch(() => ({} as { issueUrl?: string }));
+      if (data.issueUrl) {
+        setReportStatus(`Report submitted. Issue created: ${data.issueUrl}`);
+      } else {
+        setReportStatus('Report submitted successfully.');
+      }
+      setReportTitle('');
+      setReportSteps('');
+      setReportExpected('');
+      setReportSeverity('medium');
+    } catch {
+      setReportStatus('Could not reach report endpoint.');
+    } finally {
+      setReportSubmitting(false);
     }
   }
 
@@ -663,7 +705,10 @@ export default function App() {
               />
             </label>
             <div className="reportActions">
-              <button type="button" onClick={openIssueDraft}>Open issue draft</button>
+              <button type="button" onClick={submitReportDirectly} disabled={reportSubmitting}>
+                {reportSubmitting ? 'Submitting...' : 'Submit report'}
+              </button>
+              <button type="button" className="quietButton" onClick={openIssueDraft}>Open issue draft</button>
               <button type="button" className="quietButton" onClick={copyReportJson}>Copy report JSON</button>
               <button type="button" className="quietButton" onClick={() => setReportOpen(false)}>Close</button>
             </div>
@@ -927,11 +972,16 @@ export default function App() {
 function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
   const width = context.canvas.clientWidth;
   const height = context.canvas.clientHeight;
-  const scale = Math.min(width / snapshot.map.width, height / snapshot.map.height);
+  const viewport = getMapViewport(snapshot.map.width, snapshot.map.height, width, height);
 
   context.clearRect(0, 0, width, height);
   context.save();
-  context.scale(scale, scale);
+  context.translate(viewport.offsetX, viewport.offsetY);
+  context.scale(viewport.scale, viewport.scale);
+
+  context.beginPath();
+  context.rect(0, 0, snapshot.map.width, snapshot.map.height);
+  context.clip();
 
   context.fillStyle = '#111827';
   context.fillRect(0, 0, snapshot.map.width, snapshot.map.height);
@@ -1028,6 +1078,7 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
 
     context.fillStyle = '#e2e8f0';
     context.font = '12px sans-serif';
+    context.textAlign = 'left';
     context.fillText(player.name, player.x - 18, player.y - 18);
 
     if (player.carryingFlag) {
@@ -1071,7 +1122,28 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
     context.fillRect(player.x - 16, player.y - 12, (32 * player.health) / player.maxHealth, 4);
   }
 
+  context.strokeStyle = 'rgba(143, 210, 255, 0.55)';
+  context.lineWidth = 2;
+  context.strokeRect(1, 1, snapshot.map.width - 2, snapshot.map.height - 2);
+
   context.restore();
+}
+
+function getMapViewport(mapWidth: number, mapHeight: number, viewportWidth: number, viewportHeight: number) {
+  const scale = Math.min(viewportWidth / mapWidth, viewportHeight / mapHeight);
+  const pixelWidth = mapWidth * scale;
+  const pixelHeight = mapHeight * scale;
+  return {
+    scale,
+    pixelWidth,
+    pixelHeight,
+    offsetX: (viewportWidth - pixelWidth) / 2,
+    offsetY: (viewportHeight - pixelHeight) / 2,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function drawMarker(context: CanvasRenderingContext2D, x: number, y: number, color: string, label: string) {
