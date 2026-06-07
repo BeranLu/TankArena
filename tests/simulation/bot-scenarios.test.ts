@@ -58,4 +58,24 @@ describe('Bot simulation scenarios', () => {
     expect(result.winner).toBe('draw');
     expect(result.elapsedSec).toBeGreaterThanOrEqual(19.5);
   });
+
+  it('can path through a wall opening to regain line of sight', () => {
+    const scenario = defaultScenarios.find((entry) => entry.id === 'wall_gap_duel');
+    expect(scenario).toBeTruthy();
+
+    const result = runScenario(scenario!, { red: chaserPolicy, blue: chaserPolicy }, 7201);
+
+    expect(result.red.damageDealt + result.blue.damageDealt).toBeGreaterThan(0);
+    expect(result.elapsedSec).toBeLessThan(30);
+  });
+
+  it('can flank around cover to restore line of sight and deal damage', () => {
+    const scenario = defaultScenarios.find((entry) => entry.id === 'flank_cover_duel');
+    expect(scenario).toBeTruthy();
+
+    const result = runScenario(scenario!, { red: chaserPolicy, blue: chaserPolicy }, 8101);
+
+    expect(result.red.damageDealt + result.blue.damageDealt).toBeGreaterThan(0);
+    expect(result.elapsedSec).toBeLessThan(30);
+  });
 });

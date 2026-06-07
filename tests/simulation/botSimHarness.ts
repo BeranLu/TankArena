@@ -258,26 +258,102 @@ function findNearestEnemy(self: BotSnapshot, context: ScenarioContext) {
   return best;
 }
 
+function findNearestVisibleEnemy(self: BotSnapshot, context: ScenarioContext) {
+  let best: BotSnapshot | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of context.bots) {
+    if (!candidate.alive || candidate.team === self.team || candidate.id === self.id) {
+      continue;
+    }
+    if (isLineBlocked(self.x, self.y, candidate.x, candidate.y, context.obstacles)) {
+      continue;
+    }
+    const d = distance(self.x, self.y, candidate.x, candidate.y);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function findBlockingObstacle(x1: number, y1: number, x2: number, y2: number, obstacles: Obstacle[]) {
+  return obstacles.find((obstacle) => segmentIntersectsRect(x1, y1, x2, y2, obstacle)) ?? null;
+}
+
+function getLineOfSightWaypoint(self: BotSnapshot, enemy: BotSnapshot, context: ScenarioContext) {
+  const blocking = findBlockingObstacle(self.x, self.y, enemy.x, enemy.y, context.obstacles);
+  if (!blocking) {
+    return { x: enemy.x, y: enemy.y, blocked: false };
+  }
+
+  const margin = BOT_RADIUS * 4;
+  const candidates = [
+    { x: blocking.x - margin, y: blocking.y - margin },
+    { x: blocking.x + blocking.width + margin, y: blocking.y - margin },
+    { x: blocking.x - margin, y: blocking.y + blocking.height + margin },
+    { x: blocking.x + blocking.width + margin, y: blocking.y + blocking.height + margin },
+    { x: self.x < enemy.x ? blocking.x - margin : blocking.x + blocking.width + margin, y: blocking.y - margin },
+    { x: self.x < enemy.x ? blocking.x - margin : blocking.x + blocking.width + margin, y: blocking.y + blocking.height + margin },
+  ]
+    .map((candidate) => ({
+      ...candidate,
+      x: clamp(candidate.x, BOT_RADIUS, context.width - BOT_RADIUS),
+      y: clamp(candidate.y, BOT_RADIUS, context.height - BOT_RADIUS),
+    }))
+    .filter((candidate) => !collidesObstacle(candidate.x, candidate.y, BOT_RADIUS, context.obstacles))
+    .map((candidate) => ({
+      ...candidate,
+      visibleToEnemy: !isLineBlocked(candidate.x, candidate.y, enemy.x, enemy.y, context.obstacles),
+      visibleFromSelf: !isLineBlocked(self.x, self.y, candidate.x, candidate.y, context.obstacles),
+    }));
+
+  const visibleCandidates = candidates.filter((candidate) => candidate.visibleToEnemy);
+
+  if (candidates.length === 0) {
+    return { x: enemy.x, y: enemy.y, blocked: true };
+  }
+
+  const rankedCandidates = (visibleCandidates.length > 0 ? visibleCandidates : candidates).sort((a, b) => {
+    const aPenalty = (a.visibleToEnemy ? 0 : 10000) + (a.visibleFromSelf ? 0 : 2500);
+    const bPenalty = (b.visibleToEnemy ? 0 : 10000) + (b.visibleFromSelf ? 0 : 2500);
+    const aScore = aPenalty + distance(self.x, self.y, a.x, a.y) + distance(a.x, a.y, enemy.x, enemy.y) * 0.8;
+    const bScore = bPenalty + distance(self.x, self.y, b.x, b.y) + distance(b.x, b.y, enemy.x, enemy.y) * 0.8;
+    return aScore - bScore;
+  });
+
+  return {
+    x: rankedCandidates[0].x,
+    y: rankedCandidates[0].y,
+    blocked: true,
+  };
+}
+
 export const chaserPolicy: BotPolicy = {
   name: 'chaser',
   decide(self, context) {
-    const enemy = findNearestEnemy(self, context);
+    const enemy = findNearestVisibleEnemy(self, context) ?? findNearestEnemy(self, context);
     if (!enemy) {
       return { throttle: 0, turn: 0.2, fire: false };
     }
 
-    const dx = enemy.x - self.x;
-    const dy = enemy.y - self.y;
+    const waypoint = getLineOfSightWaypoint(self, enemy, context);
+    const dx = waypoint.x - self.x;
+    const dy = waypoint.y - self.y;
     const targetAngle = Math.atan2(dy, dx);
     const angleDelta = wrapAngle(targetAngle - self.heading);
     const turn = clamp(angleDelta * 2.2, -1, 1);
-    const dist = Math.hypot(dx, dy);
-    const throttle = dist > 130 ? 1 : dist < 70 ? -0.45 : 0.25;
+    const dist = Math.hypot(enemy.x - self.x, enemy.y - self.y);
+    const throttle = waypoint.blocked
+      ? (Math.abs(angleDelta) > 0.7 ? 0.35 : 0.9)
+      : dist > 130 ? 1 : dist < 70 ? -0.45 : 0.25;
+    const fireAngle = wrapAngle(Math.atan2(enemy.y - self.y, enemy.x - self.x) - self.heading);
+    const hasLineOfSight = !isLineBlocked(self.x, self.y, enemy.x, enemy.y, context.obstacles);
 
     return {
       throttle,
       turn,
-      fire: Math.abs(angleDelta) < FIRE_ARC,
+      fire: hasLineOfSight && Math.abs(fireAngle) < FIRE_ARC,
       targetId: enemy.id,
     };
   },
@@ -286,9 +362,30 @@ export const chaserPolicy: BotPolicy = {
 export const kiterPolicy: BotPolicy = {
   name: 'kiter',
   decide(self, context, rng) {
-    const enemy = findNearestEnemy(self, context);
+    const enemies = context.bots
+      .filter((candidate) => candidate.alive && candidate.team !== self.team && candidate.id !== self.id)
+      .sort((left, right) => distance(self.x, self.y, left.x, left.y) - distance(self.x, self.y, right.x, right.y));
+    const enemy = findNearestVisibleEnemy(self, context) ?? enemies[0] ?? null;
     if (!enemy) {
       return { throttle: 0, turn: 0.25, fire: false };
+    }
+
+    const visibleEnemy = findNearestVisibleEnemy(self, context);
+    const nearestEnemy = enemies[0];
+    const nearestDistance = nearestEnemy ? distance(self.x, self.y, nearestEnemy.x, nearestEnemy.y) : Number.POSITIVE_INFINITY;
+    const nearbyThreats = enemies.filter((candidate) => distance(self.x, self.y, candidate.x, candidate.y) < 260);
+    const pressured = nearbyThreats.length >= 2 || (self.hp <= 42 && nearestDistance < 220);
+
+    if (!visibleEnemy && nearestEnemy) {
+      const waypoint = getLineOfSightWaypoint(self, nearestEnemy, context);
+      const waypointAngle = Math.atan2(waypoint.y - self.y, waypoint.x - self.x);
+      const waypointDelta = wrapAngle(waypointAngle - self.heading);
+      return {
+        throttle: Math.abs(waypointDelta) > 0.7 ? 0.35 : 0.75,
+        turn: clamp(waypointDelta * 2, -1, 1),
+        fire: false,
+        targetId: nearestEnemy.id,
+      };
     }
 
     const dx = enemy.x - self.x;
@@ -297,16 +394,36 @@ export const kiterPolicy: BotPolicy = {
     const angleDelta = wrapAngle(targetAngle - self.heading);
     const dist = Math.hypot(dx, dy);
 
+    if (pressured && nearestEnemy) {
+      const primaryThreat = visibleEnemy ?? nearestEnemy;
+      const primaryAngle = wrapAngle(Math.atan2(primaryThreat.y - self.y, primaryThreat.x - self.x) - self.heading);
+      const edgeBiasX = self.x < context.width * 0.18 ? 0.35 : self.x > context.width * 0.82 ? -0.35 : 0;
+      const edgeBiasY = self.y < context.height * 0.18 ? 0.35 : self.y > context.height * 0.82 ? -0.35 : 0;
+      const centerAngle = Math.atan2(context.height / 2 - self.y + edgeBiasY * context.height, context.width / 2 - self.x + edgeBiasX * context.width);
+      const centerDelta = wrapAngle(centerAngle - self.heading);
+      const flankBias = nearbyThreats.length >= 2
+        ? Math.sign((nearbyThreats[0].y + nearbyThreats[nearbyThreats.length - 1].y) / 2 - self.y) * 0.28
+        : 0;
+
+      return {
+        throttle: nearestDistance < 210 ? -1 : -0.6,
+        turn: clamp(primaryAngle * 2.4 + centerDelta * 0.35 + flankBias, -1, 1),
+        fire: Boolean(visibleEnemy) && Math.abs(primaryAngle) < FIRE_ARC * 0.9,
+        targetId: primaryThreat.id,
+      };
+    }
+
     const preferred = 180;
     const throttle = dist > preferred + 35 ? 1 : dist < preferred - 35 ? -1 : 0;
 
     const strafeBias = Math.sin(context.time * 1.6 + (self.id.length % 5)) * 0.55 + (rng() - 0.5) * 0.1;
     const turn = clamp(angleDelta * 2 + strafeBias, -1, 1);
+    const hasLineOfSight = !isLineBlocked(self.x, self.y, enemy.x, enemy.y, context.obstacles);
 
     return {
       throttle,
       turn,
-      fire: Math.abs(angleDelta) < FIRE_ARC * 0.95,
+      fire: hasLineOfSight && Math.abs(angleDelta) < FIRE_ARC * 0.95,
       targetId: enemy.id,
     };
   },
@@ -364,6 +481,37 @@ export const defaultScenarios: ScenarioConfig[] = [
     scoreLimit: 999,
     obstacles: [
       { x: 470, y: 0, width: 60, height: 620 },
+    ],
+    spawns: [
+      { id: 'r1', team: 'red', x: 220, y: 310, heading: 0 },
+      { id: 'b1', team: 'blue', x: 780, y: 310, heading: Math.PI },
+    ],
+  },
+  {
+    id: 'wall_gap_duel',
+    label: 'Wall Gap Duel',
+    width: 1000,
+    height: 620,
+    maxTimeSec: 30,
+    scoreLimit: 999,
+    obstacles: [
+      { x: 470, y: 0, width: 60, height: 220 },
+      { x: 470, y: 360, width: 60, height: 260 },
+    ],
+    spawns: [
+      { id: 'r1', team: 'red', x: 220, y: 310, heading: 0 },
+      { id: 'b1', team: 'blue', x: 780, y: 310, heading: Math.PI },
+    ],
+  },
+  {
+    id: 'flank_cover_duel',
+    label: 'Flank Cover Duel',
+    width: 1000,
+    height: 620,
+    maxTimeSec: 30,
+    scoreLimit: 999,
+    obstacles: [
+      { x: 450, y: 170, width: 100, height: 280 },
     ],
     spawns: [
       { id: 'r1', team: 'red', x: 220, y: 310, heading: 0 },
