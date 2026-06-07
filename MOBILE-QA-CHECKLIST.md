@@ -29,10 +29,10 @@ Run this before each staging and production release.
 
 ## Controls and Input
 
-- [ ] Touch controls respond without noticeable delay.
-- [ ] Multi-touch interactions do not break movement/fire.
-- [ ] No stuck input after tab switch, rotate, or brief app backgrounding.
-- [ ] Orientation changes (portrait/landscape) do not break layout.
+- [x] Touch controls respond without noticeable delay.
+- [x] Multi-touch interactions do not break movement/fire.
+- [x] No stuck input after tab switch, rotate, or brief app backgrounding.
+- [x] Orientation changes (portrait/landscape) do not break layout.
 
 ## Multiplayer and Networking
 
