@@ -182,6 +182,28 @@ Implementation details:
 - If only one link is provided, only that provider button is shown.
 - The links are client-side only and open in a new tab.
 
+## Feedback and bug reports
+
+The top-right action area can also collect user feedback and generate structured bug reports.
+
+Set these optional environment variables:
+
+```env
+VITE_FEEDBACK_URL=https://your-feedback-form-url
+VITE_BUG_REPORT_URL=https://github.com/your-org/your-repo/issues/new
+GITHUB_ISSUES_REPO=your-org/your-repo
+GITHUB_ISSUES_TOKEN=github_pat_xxx
+```
+
+Behavior:
+
+- `VITE_FEEDBACK_URL` adds a feedback icon link.
+- `VITE_BUG_REPORT_URL` adds a bug icon that opens an in-app report form.
+- The bug form auto-captures useful runtime context (map, mode, phase, lobby, browser, URL, and timestamp).
+- "Submit report" posts to the backend endpoint and creates a GitHub issue directly when `GITHUB_ISSUES_REPO` and `GITHUB_ISSUES_TOKEN` are configured.
+- "Open issue draft" remains available as a fallback with a prefilled issue form.
+- "Copy report JSON" copies the full structured payload for pasting into any tracker.
+
 ## Traffic Analytics
 
 You can add privacy-friendly traffic analytics on Render by setting a script URL and one provider attribute in `.env`.

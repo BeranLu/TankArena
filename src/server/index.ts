@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createClient } from 'redis';
 import { Server, Socket } from 'socket.io';
+import { MAPS } from './maps.js';
 import type {
   ArenaMap,
   ClientToServerEvents,
@@ -109,154 +110,147 @@ const MAX_TOTAL_PLAYERS = parseLimit(process.env.MAX_TOTAL_PLAYERS, 40);
 const EMPTY_LOBBY_GRACE_MS = parseLimit(process.env.EMPTY_LOBBY_GRACE_MS, 45000);
 const RECONNECT_GRACE_MS = parseLimit(process.env.RECONNECT_GRACE_MS, 25000);
 const REDIS_URL = (process.env.REDIS_URL ?? '').trim();
+const GITHUB_ISSUES_TOKEN = (process.env.GITHUB_ISSUES_TOKEN ?? '').trim();
+const GITHUB_ISSUES_REPO = (process.env.GITHUB_ISSUES_REPO ?? '').trim();
 const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
 
-const MAPS: Record<string, ArenaMap> = {
-  'cargo-yard': {
-    id: 'cargo-yard',
-    name: 'Cargo Yard',
-    width: 1280,
-    height: 800,
-    obstacles: [
-      { x: 470, y: 160, width: 320, height: 50 },
-      { x: 470, y: 590, width: 320, height: 50 },
-      { x: 220, y: 280, width: 90, height: 220 },
-      { x: 970, y: 280, width: 90, height: 220 },
-    ],
-    spawns: {
-      red: [{ x: 130, y: 150 }, { x: 130, y: 400 }, { x: 130, y: 650 }],
-      blue: [{ x: 1150, y: 150 }, { x: 1150, y: 400 }, { x: 1150, y: 650 }],
-    },
-    redBase: { x: 95, y: 400 },
-    blueBase: { x: 1185, y: 400 },
-    redFlag: { x: 145, y: 400 },
-    blueFlag: { x: 1135, y: 400 },
-    redKing: { x: 170, y: 400 },
-    blueKing: { x: 1110, y: 400 },
-    controlPoints: [
-      { id: 'cp-a', label: 'A', x: 360, y: 180 },
-      { id: 'cp-b', label: 'B', x: 640, y: 400 },
-      { id: 'cp-c', label: 'C', x: 920, y: 620 },
-    ],
-  },
-  'iron-pass': {
-    id: 'iron-pass',
-    name: 'Iron Pass',
-    width: 1220,
-    height: 760,
-    obstacles: [
-      { x: 340, y: 120, width: 540, height: 45 },
-      { x: 340, y: 595, width: 540, height: 45 },
-      { x: 530, y: 210, width: 160, height: 340 },
-      { x: 90, y: 270, width: 120, height: 220 },
-      { x: 1010, y: 270, width: 120, height: 220 },
-    ],
-    spawns: {
-      red: [{ x: 245, y: 150 }, { x: 245, y: 390 }, { x: 245, y: 610 }],
-      blue: [{ x: 975, y: 150 }, { x: 975, y: 390 }, { x: 975, y: 610 }],
-    },
-    redBase: { x: 220, y: 380 },
-    blueBase: { x: 1000, y: 380 },
-    redFlag: { x: 270, y: 380 },
-    blueFlag: { x: 950, y: 380 },
-    redKing: { x: 300, y: 380 },
-    blueKing: { x: 920, y: 380 },
-    controlPoints: [
-      { id: 'cp-a', label: 'A', x: 380, y: 195 },
-      { id: 'cp-b', label: 'B', x: 610, y: 380 },
-      { id: 'cp-c', label: 'C', x: 840, y: 565 },
-    ],
-  },
-  'dune-stronghold': {
-    id: 'dune-stronghold',
-    name: 'Dune Stronghold',
-    width: 1300,
-    height: 820,
-    obstacles: [
-      { x: 360, y: 140, width: 120, height: 240 },
-      { x: 820, y: 440, width: 120, height: 240 },
-      { x: 560, y: 260, width: 180, height: 300 },
-      { x: 160, y: 500, width: 180, height: 110 },
-      { x: 960, y: 210, width: 180, height: 110 },
-    ],
-    spawns: {
-      red: [{ x: 130, y: 170 }, { x: 130, y: 410 }, { x: 130, y: 650 }],
-      blue: [{ x: 1170, y: 170 }, { x: 1170, y: 410 }, { x: 1170, y: 650 }],
-    },
-    redBase: { x: 95, y: 410 },
-    blueBase: { x: 1205, y: 410 },
-    redFlag: { x: 150, y: 410 },
-    blueFlag: { x: 1150, y: 410 },
-    redKing: { x: 190, y: 410 },
-    blueKing: { x: 1110, y: 410 },
-    controlPoints: [
-      { id: 'cp-a', label: 'A', x: 360, y: 410 },
-      { id: 'cp-b', label: 'B', x: 650, y: 410 },
-      { id: 'cp-c', label: 'C', x: 940, y: 410 },
-    ],
-  },
-  'frostline': {
-    id: 'frostline',
-    name: 'Frostline',
-    width: 1240,
-    height: 780,
-    obstacles: [
-      { x: 280, y: 110, width: 680, height: 45 },
-      { x: 280, y: 625, width: 680, height: 45 },
-      { x: 460, y: 220, width: 90, height: 340 },
-      { x: 690, y: 220, width: 90, height: 340 },
-      { x: 100, y: 330, width: 120, height: 120 },
-      { x: 1020, y: 330, width: 120, height: 120 },
-    ],
-    spawns: {
-      red: [{ x: 145, y: 150 }, { x: 145, y: 390 }, { x: 145, y: 630 }],
-      blue: [{ x: 1095, y: 150 }, { x: 1095, y: 390 }, { x: 1095, y: 630 }],
-    },
-    redBase: { x: 95, y: 390 },
-    blueBase: { x: 1145, y: 390 },
-    redFlag: { x: 150, y: 390 },
-    blueFlag: { x: 1090, y: 390 },
-    redKing: { x: 190, y: 390 },
-    blueKing: { x: 1050, y: 390 },
-    controlPoints: [
-      { id: 'cp-a', label: 'A', x: 340, y: 390 },
-      { id: 'cp-b', label: 'B', x: 620, y: 390 },
-      { id: 'cp-c', label: 'C', x: 900, y: 390 },
-    ],
-  },
-  'reactor-ridge': {
-    id: 'reactor-ridge',
-    name: 'Reactor Ridge',
-    width: 1320,
-    height: 820,
-    obstacles: [
-      { x: 530, y: 170, width: 260, height: 120 },
-      { x: 530, y: 530, width: 260, height: 120 },
-      { x: 360, y: 320, width: 120, height: 180 },
-      { x: 840, y: 320, width: 120, height: 180 },
-      { x: 180, y: 240, width: 130, height: 100 },
-      { x: 1010, y: 480, width: 130, height: 100 },
-    ],
-    spawns: {
-      red: [{ x: 140, y: 180 }, { x: 140, y: 410 }, { x: 140, y: 640 }],
-      blue: [{ x: 1180, y: 180 }, { x: 1180, y: 410 }, { x: 1180, y: 640 }],
-    },
-    redBase: { x: 100, y: 410 },
-    blueBase: { x: 1220, y: 410 },
-    redFlag: { x: 155, y: 410 },
-    blueFlag: { x: 1165, y: 410 },
-    redKing: { x: 195, y: 410 },
-    blueKing: { x: 1125, y: 410 },
-    controlPoints: [
-      { id: 'cp-a', label: 'A', x: 390, y: 410 },
-      { id: 'cp-b', label: 'B', x: 660, y: 410 },
-      { id: 'cp-c', label: 'C', x: 930, y: 410 },
-    ],
-  },
+type UserReportSeverity = 'low' | 'medium' | 'high';
+type UserReportPayload = {
+  title: string;
+  severity: UserReportSeverity;
+  steps: string;
+  expected: string;
+  generatedAt: string;
+  pageUrl: string;
+  browser: string;
+  language: string;
+  timezone: string;
+  joined: boolean;
+  observer: boolean;
+  lobbyId: string | null;
+  lobbyName: string | null;
+  mode: string;
+  mapId: string | null;
+  mapName: string | null;
+  phase: string;
+  activePlayers: number | null;
+  connectedClients: number | null;
+  scoreboard: { red: number; blue: number } | null;
 };
 
 const app = express();
+app.use(express.json({ limit: '200kb' }));
+
+const reportRateLimit = new Map<string, number[]>();
+
+app.post('/api/report-bug', async (request, response) => {
+  const ip = (request.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+    ?? request.socket.remoteAddress
+    ?? 'unknown';
+  const now = Date.now();
+  const recent = (reportRateLimit.get(ip) ?? []).filter((time) => now - time < 10 * 60 * 1000);
+  if (recent.length >= 6) {
+    response.status(429).json({ error: 'Too many reports from this IP. Please try again later.' });
+    return;
+  }
+  recent.push(now);
+  reportRateLimit.set(ip, recent);
+
+  const payload = request.body as Partial<UserReportPayload> | undefined;
+  const title = (payload?.title ?? '').toString().trim();
+  const steps = (payload?.steps ?? '').toString().trim();
+  const expected = (payload?.expected ?? '').toString().trim();
+  const severity = payload?.severity === 'low' || payload?.severity === 'high' ? payload.severity : 'medium';
+
+  if (!title || !steps) {
+    response.status(400).json({ error: 'Title and steps are required.' });
+    return;
+  }
+
+  if (!GITHUB_ISSUES_TOKEN || !GITHUB_ISSUES_REPO.includes('/')) {
+    response.status(503).json({ error: 'Server bug reporting is not configured yet.' });
+    return;
+  }
+
+  const safePayload: UserReportPayload = {
+    title: title.slice(0, 120),
+    severity,
+    steps: steps.slice(0, 4000),
+    expected: expected.slice(0, 2000),
+    generatedAt: (payload?.generatedAt ?? new Date().toISOString()).toString().slice(0, 64),
+    pageUrl: (payload?.pageUrl ?? '').toString().slice(0, 500),
+    browser: (payload?.browser ?? '').toString().slice(0, 700),
+    language: (payload?.language ?? '').toString().slice(0, 64),
+    timezone: (payload?.timezone ?? '').toString().slice(0, 128),
+    joined: Boolean(payload?.joined),
+    observer: Boolean(payload?.observer),
+    lobbyId: payload?.lobbyId ? payload.lobbyId.toString().slice(0, 120) : null,
+    lobbyName: payload?.lobbyName ? payload.lobbyName.toString().slice(0, 120) : null,
+    mode: (payload?.mode ?? 'none').toString().slice(0, 64),
+    mapId: payload?.mapId ? payload.mapId.toString().slice(0, 120) : null,
+    mapName: payload?.mapName ? payload.mapName.toString().slice(0, 120) : null,
+    phase: (payload?.phase ?? 'none').toString().slice(0, 64),
+    activePlayers: Number.isFinite(payload?.activePlayers) ? Number(payload?.activePlayers) : null,
+    connectedClients: Number.isFinite(payload?.connectedClients) ? Number(payload?.connectedClients) : null,
+    scoreboard: payload?.scoreboard
+      && Number.isFinite(payload.scoreboard.red)
+      && Number.isFinite(payload.scoreboard.blue)
+      ? { red: Number(payload.scoreboard.red), blue: Number(payload.scoreboard.blue) }
+      : null,
+  };
+
+  const [owner, repo] = GITHUB_ISSUES_REPO.split('/');
+  const issueBody = [
+    '## Summary',
+    safePayload.title,
+    '',
+    '## Severity',
+    safePayload.severity,
+    '',
+    '## Steps To Reproduce',
+    safePayload.steps,
+    '',
+    '## Expected Result',
+    safePayload.expected || '(not provided)',
+    '',
+    '## Auto-Captured Context',
+    '```json',
+    JSON.stringify(safePayload, null, 2),
+    '```',
+  ].join('\n');
+
+  try {
+    const ghResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GITHUB_ISSUES_TOKEN}`,
+        'User-Agent': 'shellstorm-server',
+        'Accept': 'application/vnd.github+json',
+      },
+      body: JSON.stringify({
+        title: `[User Report] ${safePayload.title}`,
+        body: issueBody,
+        labels: ['bug', 'user-report'],
+      }),
+    });
+
+    if (!ghResponse.ok) {
+      const text = await ghResponse.text();
+      console.error('GitHub issue creation failed:', ghResponse.status, text);
+      response.status(502).json({ error: 'Could not create GitHub issue.' });
+      return;
+    }
+
+    const created = await ghResponse.json() as { html_url?: string; number?: number };
+    response.status(201).json({ ok: true, issueUrl: created.html_url ?? '', issueNumber: created.number ?? null });
+  } catch (error) {
+    console.error('Bug report endpoint failure:', error);
+    response.status(500).json({ error: 'Unexpected error while creating issue.' });
+  }
+});
+
 const server = http.createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: { origin: true, credentials: true },
