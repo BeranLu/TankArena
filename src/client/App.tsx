@@ -439,7 +439,39 @@ export default function App() {
           <p className="eyebrow">Tactical Arena Warfare</p>
           <h1>ShellStorm</h1>
         </div>
-        <div className="statusPill">{joined ? (snapshot ? snapshot.phase : 'loading') : 'lobby browser'}</div>
+        {HAS_SUPPORT_LINKS ? (
+          <div className="topbarSupport" aria-label="Support links">
+            {STRIPE_DONATE_URL ? (
+              <a
+                className="supportIconLink"
+                href={STRIPE_DONATE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Donate with Stripe"
+                title="Donate with Stripe"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M10.7 7.2c1.8 0 2.6.5 3.4 1l1-3.4c-.9-.4-2.3-.8-4.4-.8-3.7 0-6.2 2-6.2 5.3 0 5 7 4.2 7 6.3 0 .8-.7 1-1.8 1-1.8 0-3.3-.7-4.5-1.3L4.2 19c1.3.6 3.5 1.2 5.8 1.2 3.8 0 6.5-1.9 6.5-5.3 0-5.4-7-4.4-7-6.4 0-.8.6-1.3 1.2-1.3Z" />
+                </svg>
+              </a>
+            ) : null}
+            {BUY_ME_A_COFFEE_URL ? (
+              <a
+                className="supportIconLink coffee"
+                href={BUY_ME_A_COFFEE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Support on Buy Me a Coffee"
+                title="Support on Buy Me a Coffee"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M5 7h11a1 1 0 0 1 1 1v1h1.5a2.5 2.5 0 0 1 0 5H17v.5A3.5 3.5 0 0 1 13.5 18h-6A3.5 3.5 0 0 1 4 14.5V8a1 1 0 0 1 1-1Zm1 2v5.5c0 .8.7 1.5 1.5 1.5h6c.8 0 1.5-.7 1.5-1.5V9H6Zm11 3h1.5a.5.5 0 0 0 0-1H17v1Z" />
+                  <path d="M7 20h8a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2Z" />
+                </svg>
+              </a>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       {announcement ? <div className="announcement">{announcement}</div> : null}
@@ -481,24 +513,6 @@ export default function App() {
             <input type="password" value={newLobbyPassword} onChange={(event) => setNewLobbyPassword(event.target.value)} maxLength={48} placeholder="Leave empty for public lobby" />
           </label>
           <button type="button" onClick={createLobby} disabled={!newLobbyName.trim()}>Create lobby</button>
-          {HAS_SUPPORT_LINKS ? (
-            <div className="supportBox">
-              <p className="supportTitle">Support the project</p>
-              <p className="supportText">If you enjoy Tank Arena, you can support development with either option below.</p>
-              <div className="supportActions">
-                {STRIPE_DONATE_URL ? (
-                  <a className="supportLink" href={STRIPE_DONATE_URL} target="_blank" rel="noopener noreferrer">
-                    Donate via Stripe
-                  </a>
-                ) : null}
-                {BUY_ME_A_COFFEE_URL ? (
-                  <a className="supportLink secondary" href={BUY_ME_A_COFFEE_URL} target="_blank" rel="noopener noreferrer">
-                    Buy Me a Coffee
-                  </a>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
         </div>
       </section> : null}
 
