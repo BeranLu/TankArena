@@ -436,8 +436,8 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Local network tank arena</p>
-          <h1>Tank Arena</h1>
+          <p className="eyebrow">Tactical Arena Warfare</p>
+          <h1>ShellStorm</h1>
         </div>
         <div className="statusPill">{joined ? (snapshot ? snapshot.phase : 'loading') : 'lobby browser'}</div>
       </header>
