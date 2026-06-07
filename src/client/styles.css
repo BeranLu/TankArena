@@ -1,10 +1,12 @@
 :root {
   color-scheme: dark;
-  font-family: "Segoe UI", "Trebuchet MS", sans-serif;
-  --panel: rgba(15, 23, 42, 0.92);
-  --panel-border: rgba(148, 163, 184, 0.18);
-  --text: #e2e8f0;
-  --muted: #94a3b8;
+  font-family: "Rajdhani", "Bahnschrift", "Trebuchet MS", sans-serif;
+  --panel: rgba(12, 18, 30, 0.9);
+  --panel-border: rgba(136, 180, 255, 0.24);
+  --text: #e8edf7;
+  --muted: #9cb0ce;
+  --accent: #8fd2ff;
+  --accent-warm: #f2b56f;
 }
 
 * {
@@ -20,9 +22,10 @@ body,
 
 body {
   background:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.18), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(20, 184, 166, 0.12), transparent 24%),
-    linear-gradient(180deg, #050814, #0b1220 55%, #050814);
+    radial-gradient(circle at 15% 12%, rgba(96, 165, 250, 0.22), transparent 34%),
+    radial-gradient(circle at 82% 78%, rgba(251, 191, 36, 0.16), transparent 28%),
+    linear-gradient(170deg, #04070d, #0a1222 44%, #10192c 100%);
+  background-attachment: fixed;
   color: var(--text);
 }
 
@@ -33,16 +36,19 @@ select {
 }
 
 button {
-  border: 1px solid rgba(125, 211, 252, 0.25);
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+  border: 1px solid rgba(143, 210, 255, 0.45);
+  background: linear-gradient(180deg, rgba(43, 61, 92, 0.92), rgba(17, 25, 41, 0.95));
   color: var(--text);
   padding: 0.75rem 1rem;
   border-radius: 12px;
   cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
 }
 
 button:hover:not(:disabled) {
-  border-color: rgba(125, 211, 252, 0.6);
+  border-color: rgba(242, 181, 111, 0.9);
 }
 
 button:disabled {
@@ -53,8 +59,8 @@ button:disabled {
 input,
 select {
   width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(143, 210, 255, 0.22);
+  background: rgba(8, 12, 24, 0.78);
   color: var(--text);
   border-radius: 12px;
   padding: 0.75rem 0.9rem;
@@ -64,6 +70,17 @@ select {
   max-width: 1500px;
   margin: 0 auto;
   padding: 24px;
+  position: relative;
+}
+
+.shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.14;
+  background-image: linear-gradient(transparent 95%, rgba(143, 210, 255, 0.2) 96%);
+  background-size: 100% 18px;
 }
 
 .topbar,
@@ -84,10 +101,11 @@ select {
 
 .eyebrow {
   margin: 0 0 6px;
-  color: #7dd3fc;
+  color: var(--accent-warm);
   text-transform: uppercase;
-  letter-spacing: 0.28em;
+  letter-spacing: 0.34em;
   font-size: 0.72rem;
+  font-weight: 700;
 }
 
 h1,
@@ -100,13 +118,15 @@ h1 {
   margin-bottom: 0;
   font-size: clamp(2rem, 4vw, 3.6rem);
   line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .statusPill,
 .announcement {
   border: 1px solid var(--panel-border);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.78);
+  background: rgba(17, 24, 39, 0.86);
   padding: 0.75rem 1rem;
 }
 
@@ -139,7 +159,8 @@ h1 {
   border: 1px solid var(--panel-border);
   border-radius: 24px;
   padding: 20px;
-  box-shadow: 0 32px 64px rgba(2, 6, 23, 0.35);
+  box-shadow: 0 28px 56px rgba(2, 6, 23, 0.44), inset 0 1px 0 rgba(143, 210, 255, 0.1);
+  backdrop-filter: blur(3px);
 }
 
 .panelHeader {
@@ -164,8 +185,8 @@ h1 {
   width: 100%;
   aspect-ratio: 16 / 10;
   border-radius: 20px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: #0b1320;
+  border: 1px solid rgba(143, 210, 255, 0.24);
+  background: #0a1424;
 }
 
 .gamePanel {
@@ -263,21 +284,22 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(125, 211, 252, 0.25);
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+  border: 1px solid rgba(143, 210, 255, 0.4);
+  background: linear-gradient(180deg, rgba(45, 63, 92, 0.95), rgba(16, 24, 40, 0.95));
   color: var(--text);
   padding: 0.65rem 0.9rem;
   border-radius: 12px;
   text-decoration: none;
+  font-weight: 700;
 }
 
 .supportLink.secondary {
-  border-color: rgba(148, 163, 184, 0.35);
-  background: linear-gradient(180deg, rgba(51, 65, 85, 0.92), rgba(30, 41, 59, 0.95));
+  border-color: rgba(242, 181, 111, 0.45);
+  background: linear-gradient(180deg, rgba(84, 63, 35, 0.88), rgba(52, 38, 21, 0.9));
 }
 
 .supportLink:hover {
-  border-color: rgba(125, 211, 252, 0.6);
+  border-color: rgba(242, 181, 111, 0.95);
 }
 
 .field,
@@ -330,7 +352,7 @@ h1 {
   align-items: center;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(2, 6, 23, 0.28);
+  background: rgba(8, 12, 24, 0.56);
 }
 
 .dot {
