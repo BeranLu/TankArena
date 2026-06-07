@@ -461,11 +461,18 @@ export default function App() {
     if (!socketRef.current || !canvasRef.current || !snapshotRef.current || !joinedRef.current || observerRef.current) {
       return;
     }
-    const rect = canvasRef.current.getBoundingClientRect();
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
     const map = snapshotRef.current.map;
-    const viewport = getMapViewport(map.width, map.height, rect.width, rect.height);
-    const localX = clientX - rect.left - viewport.offsetX;
-    const localY = clientY - rect.top - viewport.offsetY;
+    // Use clientWidth/Height (same as draw()) to avoid CSS border scale mismatch.
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const viewport = getMapViewport(map.width, map.height, vw, vh);
+    // Compensate for CSS border between getBoundingClientRect origin and inner canvas edge.
+    const borderX = (rect.width - vw) / 2;
+    const borderY = (rect.height - vh) / 2;
+    const localX = clientX - rect.left - borderX - viewport.offsetX;
+    const localY = clientY - rect.top - borderY - viewport.offsetY;
     inputRef.current.aimX = clamp(localX / viewport.scale, 0, map.width);
     inputRef.current.aimY = clamp(localY / viewport.scale, 0, map.height);
     pushInput();
@@ -1122,11 +1129,18 @@ function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
     context.fillRect(player.x - 16, player.y - 12, (32 * player.health) / player.maxHealth, 4);
   }
 
-  context.strokeStyle = 'rgba(143, 210, 255, 0.55)';
-  context.lineWidth = 2;
-  context.strokeRect(1, 1, snapshot.map.width - 2, snapshot.map.height - 2);
-
   context.restore();
+
+  // Draw the arena boundary in CSS-pixel space after restore so it renders
+  // on top of all game content and tanks can never visually cross it.
+  context.strokeStyle = 'rgba(143, 210, 255, 0.75)';
+  context.lineWidth = 2;
+  context.strokeRect(
+    viewport.offsetX + 1,
+    viewport.offsetY + 1,
+    viewport.pixelWidth - 2,
+    viewport.pixelHeight - 2,
+  );
 }
 
 function getMapViewport(mapWidth: number, mapHeight: number, viewportWidth: number, viewportHeight: number) {
