@@ -88,6 +88,25 @@ Render can deploy directly from this repository using `render.yaml`.
 
 Render provides HTTPS automatically and assigns a public URL.
 
+### Render staging setup
+
+Use a separate staging service before pushing changes to players.
+
+1. Create a branch named `staging` and push it to GitHub.
+2. In Render, add a second Blueprint service from the same repository.
+3. Use the staging service defined in `render.yaml` (`tank-arena-staging`).
+4. Set staging-only env vars as needed, especially a different `ADMIN_PASSWORD`.
+5. Attach a staging domain such as `staging.shellstorm.online`.
+6. Use staging to validate builds, gameplay, analytics, and donation links before production deploys.
+
+Recommended release flow:
+
+1. Merge code into `staging`.
+2. Wait for the staging deploy to finish.
+3. Smoke-test the site and run a few live joins.
+4. Merge `staging` into `main` only after it looks good.
+5. Let the production service deploy from `main`.
+
 Useful notes for Render:
 
 - Free plan instances can sleep when idle.
