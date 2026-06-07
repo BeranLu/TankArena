@@ -16,15 +16,15 @@ Run this before each staging and production release.
 - [x] Start a match.
 - [x] Move tank with touch controls.
 - [x] Fire weapon reliably.
-- [ ] Survive until finish state or observe a full round end.
-- [ ] Return to lobby and start next round.
+- [x] Survive until finish state or observe a full round end.
+- [x] Return to lobby and start next round.
 
 ## UI and Readability
 
 - [x] Lobby screen text is readable without zooming.
 - [x] Buttons are tappable (no accidental taps on neighbors).
 - [x] Admin panel sections do not overflow or clip text.
-- [ ] Score/announcements remain readable during action.
+- [x] Score/announcements remain readable during action.
 - [x] No important controls are hidden behind browser UI bars.
 
 ## Controls and Input
@@ -36,16 +36,16 @@ Run this before each staging and production release.
 
 ## Multiplayer and Networking
 
-- [ ] Join existing lobby from mobile while another player is active.
-- [ ] Observer mode works when joining an already running match.
-- [ ] Reconnect after temporary network drop restores expected state.
-- [ ] No repeated disconnect/reconnect loop.
+- [x] Join existing lobby from mobile while another player is active.
+- [x] Observer mode works when joining an already running match.
+- [x] Reconnect after temporary network drop restores expected state.
+- [x] No repeated disconnect/reconnect loop.
 
 ## Performance and Stability
 
-- [ ] Match runs without severe stutter for at least 3 minutes.
-- [ ] No browser crash or tab reload during normal gameplay.
-- [ ] Battery/thermal behavior stays reasonable during short session.
+- [x] Match runs without severe stutter for at least 3 minutes.
+- [x] No browser crash or tab reload during normal gameplay.
+- [x] Battery/thermal behavior stays reasonable during short session.
 
 ## Release Gate
 
