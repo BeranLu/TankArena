@@ -340,6 +340,9 @@ export default function App() {
       const ratio = window.devicePixelRatio || 1;
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
+      if (width === 0 || height === 0) {
+        return;
+      }
       canvas.width = Math.floor(width * ratio);
       canvas.height = Math.floor(height * ratio);
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -356,12 +359,14 @@ export default function App() {
       frameId = window.requestAnimationFrame(render);
     };
 
-    resize();
+    // ResizeObserver fires on initial layout AND on every element resize,
+    // unlike window 'resize' which misses the first layout pass.
+    const ro = new ResizeObserver(() => resize());
+    ro.observe(canvas);
     render();
-    window.addEventListener('resize', resize);
 
     return () => {
-      window.removeEventListener('resize', resize);
+      ro.disconnect();
       window.cancelAnimationFrame(frameId);
     };
   }, [joined]);
