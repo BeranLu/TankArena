@@ -14,18 +14,18 @@ Run this before each staging and production release.
 - [x] Open game page and confirm first render is stable (no layout jumps).
 - [x] Create or join a lobby.
 - [x] Start a match.
-- [ ] Move tank with touch controls.
-- [ ] Fire weapon reliably.
+- [x] Move tank with touch controls.
+- [x] Fire weapon reliably.
 - [ ] Survive until finish state or observe a full round end.
 - [ ] Return to lobby and start next round.
 
 ## UI and Readability
 
-- [ ] Lobby screen text is readable without zooming.
-- [ ] Buttons are tappable (no accidental taps on neighbors).
-- [ ] Admin panel sections do not overflow or clip text.
+- [x] Lobby screen text is readable without zooming.
+- [x] Buttons are tappable (no accidental taps on neighbors).
+- [x] Admin panel sections do not overflow or clip text.
 - [ ] Score/announcements remain readable during action.
-- [ ] No important controls are hidden behind browser UI bars.
+- [x] No important controls are hidden behind browser UI bars.
 
 ## Controls and Input
 
