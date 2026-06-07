@@ -91,6 +91,9 @@ const UI_SNAPSHOT_INTERVAL_MS = 100;
 const HAS_TOPBAR_ACTIONS = Boolean(HAS_SUPPORT_LINKS || FEEDBACK_URL || BUG_REPORT_URL);
 const JOYSTICK_MAX_OFFSET = 38;
 const JOYSTICK_DEADZONE = 0.25;
+const AIM_JOYSTICK_MAX_OFFSET = 38;
+const AIM_JOYSTICK_DEADZONE = 0.18;
+const AIM_DISTANCE = 220;
 
 type MobileControlMode = 'joystick' | 'buttons';
 
@@ -134,6 +137,7 @@ export default function App() {
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const [joystickVisual, setJoystickVisual] = useState({ active: false, x: 0, y: 0 });
+  const [aimJoystickVisual, setAimJoystickVisual] = useState({ active: false, x: 0, y: 0 });
   const [mobileControlMode, setMobileControlMode] = useState<MobileControlMode>('joystick');
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
@@ -146,6 +150,7 @@ export default function App() {
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const joystickPointerIdRef = useRef<number | null>(null);
+  const aimJoystickPointerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -533,6 +538,12 @@ export default function App() {
     setMovementFlags({ up: false, down: false, left: false, right: false });
   }
 
+  function resetAimJoystick() {
+    aimJoystickPointerIdRef.current = null;
+    setAimJoystickVisual({ active: false, x: 0, y: 0 });
+    setInputFlag('fire', false);
+  }
+
   function updateJoystickFromPoint(clientX: number, clientY: number, element: HTMLDivElement) {
     const rect = element.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
@@ -561,6 +572,45 @@ export default function App() {
       left: nx < -JOYSTICK_DEADZONE,
       right: nx > JOYSTICK_DEADZONE,
     });
+  }
+
+  function updateAimJoystickFromPoint(clientX: number, clientY: number, element: HTMLDivElement) {
+    const rect = element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const rawX = clientX - centerX;
+    const rawY = clientY - centerY;
+    const distance = Math.hypot(rawX, rawY);
+    const cappedDistance = Math.min(distance, AIM_JOYSTICK_MAX_OFFSET);
+    const safeDistance = distance || 1;
+    const x = (rawX / safeDistance) * cappedDistance;
+    const y = (rawY / safeDistance) * cappedDistance;
+
+    setAimJoystickVisual({ active: true, x, y });
+
+    const nx = x / AIM_JOYSTICK_MAX_OFFSET;
+    const ny = y / AIM_JOYSTICK_MAX_OFFSET;
+    const magnitude = Math.hypot(nx, ny);
+    if (magnitude < AIM_JOYSTICK_DEADZONE) {
+      setInputFlag('fire', false);
+      return;
+    }
+
+    const snapshot = snapshotRef.current;
+    const socketId = socketRef.current?.id;
+    if (!snapshot || !socketId) {
+      return;
+    }
+
+    const self = snapshot.players.find((player) => player.id === socketId);
+    if (!self || self.observer) {
+      return;
+    }
+
+    inputRef.current.aimX = clamp(self.x + nx * AIM_DISTANCE, 0, snapshot.map.width);
+    inputRef.current.aimY = clamp(self.y + ny * AIM_DISTANCE, 0, snapshot.map.height);
+    inputRef.current.fire = true;
+    pushInput();
   }
 
   function updateAim(clientX: number, clientY: number) {
@@ -880,7 +930,7 @@ export default function App() {
             width={960}
             height={640}
             onPointerDown={(event) => {
-              if (!joined || observer || event.pointerType !== 'touch') {
+              if (!joined || observer || event.pointerType !== 'touch' || isCoarsePointer) {
                 return;
               }
               event.preventDefault();
@@ -888,7 +938,7 @@ export default function App() {
               setInputFlag('fire', true);
             }}
             onPointerMove={(event) => {
-              if (!joined || observer || event.pointerType !== 'touch') {
+              if (!joined || observer || event.pointerType !== 'touch' || isCoarsePointer) {
                 return;
               }
               updateAim(event.clientX, event.clientY);
@@ -1072,9 +1122,51 @@ export default function App() {
                     </button>
                   </div>
                 )}
+
+                <div
+                  className="joystickPad aimPad"
+                  aria-label="Gun aim joystick"
+                  onPointerDown={(event) => {
+                    if (!joined || observer || aimJoystickPointerIdRef.current !== null) {
+                      return;
+                    }
+                    event.preventDefault();
+                    aimJoystickPointerIdRef.current = event.pointerId;
+                    (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+                    updateAimJoystickFromPoint(event.clientX, event.clientY, event.currentTarget as HTMLDivElement);
+                  }}
+                  onPointerMove={(event) => {
+                    if (event.pointerId !== aimJoystickPointerIdRef.current) {
+                      return;
+                    }
+                    event.preventDefault();
+                    updateAimJoystickFromPoint(event.clientX, event.clientY, event.currentTarget as HTMLDivElement);
+                  }}
+                  onPointerUp={(event) => {
+                    if (event.pointerId !== aimJoystickPointerIdRef.current) {
+                      return;
+                    }
+                    (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
+                    resetAimJoystick();
+                  }}
+                  onPointerCancel={(event) => {
+                    if (event.pointerId !== aimJoystickPointerIdRef.current) {
+                      return;
+                    }
+                    (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
+                    resetAimJoystick();
+                  }}
+                >
+                  <div
+                    className={`joystickKnob aimKnob${aimJoystickVisual.active ? ' active' : ''}`}
+                    style={{
+                      transform: `translate(calc(-50% + ${aimJoystickVisual.x}px), calc(-50% + ${aimJoystickVisual.y}px))`,
+                    }}
+                  />
+                </div>
               </div>
 
-              <p className="mobileControlHint">Touch the arena to aim and fire.</p>
+              <p className="mobileControlHint">Left control moves hull. Right joystick aims turret and fires while moved.</p>
             </div>
           ) : null}
         </section>
