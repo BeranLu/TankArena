@@ -1,0 +1,71 @@
+# Mobile QA Checklist
+
+Run this before each staging and production release.
+
+## Test Setup
+
+- [ ] Use latest mobile browser versions (Chrome Android, Safari iOS).
+- [ ] Test on at least 1 small phone viewport and 1 large phone viewport.
+- [ ] Clear browser cache or use private/incognito session.
+- [ ] Confirm server is reachable from mobile device on the same network.
+
+## Critical Player Flow
+
+- [ ] Open game page and confirm first render is stable (no layout jumps).
+- [ ] Create or join a lobby.
+- [ ] Start a match.
+- [ ] Move tank with touch controls.
+- [ ] Fire weapon reliably.
+- [ ] Survive until finish state or observe a full round end.
+- [ ] Return to lobby and start next round.
+
+## UI and Readability
+
+- [ ] Lobby screen text is readable without zooming.
+- [ ] Buttons are tappable (no accidental taps on neighbors).
+- [ ] Admin panel sections do not overflow or clip text.
+- [ ] Score/announcements remain readable during action.
+- [ ] No important controls are hidden behind browser UI bars.
+
+## Controls and Input
+
+- [ ] Touch controls respond without noticeable delay.
+- [ ] Multi-touch interactions do not break movement/fire.
+- [ ] No stuck input after tab switch, rotate, or brief app backgrounding.
+- [ ] Orientation changes (portrait/landscape) do not break layout.
+
+## Multiplayer and Networking
+
+- [ ] Join existing lobby from mobile while another player is active.
+- [ ] Observer mode works when joining an already running match.
+- [ ] Reconnect after temporary network drop restores expected state.
+- [ ] No repeated disconnect/reconnect loop.
+
+## Performance and Stability
+
+- [ ] Match runs without severe stutter for at least 3 minutes.
+- [ ] No browser crash or tab reload during normal gameplay.
+- [ ] Battery/thermal behavior stays reasonable during short session.
+
+## Release Gate
+
+Pass if all Critical Player Flow items pass and no blocker defects exist.
+
+Block release if any of these fail:
+- Cannot join or start match on mobile.
+- Cannot move/fire reliably with touch.
+- Core HUD/admin text unreadable or major controls inaccessible.
+- Frequent disconnect loop or crash.
+
+## Defect Log Template
+
+Use this format for each issue:
+
+- Device:
+- OS + Browser version:
+- Build/Commit:
+- Steps to reproduce:
+- Expected:
+- Actual:
+- Severity (Blocker/High/Medium/Low):
+- Screenshot/Video:

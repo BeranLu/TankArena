@@ -8,3 +8,10 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+
+# Generated itch.io screenshots and local capture artifacts
+deploy/itch-screenshots/
+
+# Generated bot simulation reports and traces
+tests/simulation/output/*.html
+tests/simulation/output/*.json

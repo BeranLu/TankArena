@@ -128,6 +128,7 @@ export default function App() {
   const [reportSeverity, setReportSeverity] = useState<UserReportSeverity>('medium');
   const [reportStatus, setReportStatus] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<GameSnapshot | null>(null);
@@ -189,6 +190,18 @@ export default function App() {
 
     return () => {
       script.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    const pointerQuery = window.matchMedia('(pointer: coarse)');
+    const updatePointerType = () => setIsCoarsePointer(pointerQuery.matches);
+
+    updatePointerType();
+    pointerQuery.addEventListener('change', updatePointerType);
+
+    return () => {
+      pointerQuery.removeEventListener('change', updatePointerType);
     };
   }, []);
 
@@ -483,6 +496,14 @@ export default function App() {
       return;
     }
     socketRef.current.emit('input', { ...inputRef.current });
+  }
+
+  function setInputFlag(key: keyof Pick<PlayerInput, 'up' | 'down' | 'left' | 'right' | 'fire'>, value: boolean) {
+    if (inputRef.current[key] === value) {
+      return;
+    }
+    inputRef.current[key] = value;
+    pushInput();
   }
 
   function updateAim(clientX: number, clientY: number) {
@@ -796,7 +817,38 @@ export default function App() {
 
       {joined ? <main className="layout">
         <section className="panel gamePanel">
-          <canvas ref={canvasRef} className="arenaCanvas" width={960} height={640} />
+          <canvas
+            ref={canvasRef}
+            className="arenaCanvas"
+            width={960}
+            height={640}
+            onPointerDown={(event) => {
+              if (!joined || observer || event.pointerType !== 'touch') {
+                return;
+              }
+              event.preventDefault();
+              updateAim(event.clientX, event.clientY);
+              setInputFlag('fire', true);
+            }}
+            onPointerMove={(event) => {
+              if (!joined || observer || event.pointerType !== 'touch') {
+                return;
+              }
+              updateAim(event.clientX, event.clientY);
+            }}
+            onPointerUp={(event) => {
+              if (event.pointerType !== 'touch') {
+                return;
+              }
+              setInputFlag('fire', false);
+            }}
+            onPointerCancel={(event) => {
+              if (event.pointerType !== 'touch') {
+                return;
+              }
+              setInputFlag('fire', false);
+            }}
+          />
 
           {isFinished && snapshot?.roundResult ? (
             <div className="roundResultOverlay">
@@ -834,6 +886,81 @@ export default function App() {
             <span>Space or mouse to shoot</span>
             <span>{observer ? 'Observer mode' : 'Playing'}{isAdmin ? ' · admin' : ''}</span>
           </div>
+
+          {isCoarsePointer && !observer ? (
+            <div className="mobileControls" role="group" aria-label="Touch controls">
+              <button
+                type="button"
+                className="touchBtn"
+                aria-label="Move forward"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setInputFlag('up', true);
+                }}
+                onPointerUp={() => setInputFlag('up', false)}
+                onPointerCancel={() => setInputFlag('up', false)}
+                onPointerLeave={() => setInputFlag('up', false)}
+              >
+                Up
+              </button>
+              <button
+                type="button"
+                className="touchBtn"
+                aria-label="Turn left"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setInputFlag('left', true);
+                }}
+                onPointerUp={() => setInputFlag('left', false)}
+                onPointerCancel={() => setInputFlag('left', false)}
+                onPointerLeave={() => setInputFlag('left', false)}
+              >
+                Left
+              </button>
+              <button
+                type="button"
+                className="touchBtn"
+                aria-label="Turn right"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setInputFlag('right', true);
+                }}
+                onPointerUp={() => setInputFlag('right', false)}
+                onPointerCancel={() => setInputFlag('right', false)}
+                onPointerLeave={() => setInputFlag('right', false)}
+              >
+                Right
+              </button>
+              <button
+                type="button"
+                className="touchBtn"
+                aria-label="Move backward"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setInputFlag('down', true);
+                }}
+                onPointerUp={() => setInputFlag('down', false)}
+                onPointerCancel={() => setInputFlag('down', false)}
+                onPointerLeave={() => setInputFlag('down', false)}
+              >
+                Down
+              </button>
+              <button
+                type="button"
+                className="touchBtn touchBtnFire"
+                aria-label="Fire"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setInputFlag('fire', true);
+                }}
+                onPointerUp={() => setInputFlag('fire', false)}
+                onPointerCancel={() => setInputFlag('fire', false)}
+                onPointerLeave={() => setInputFlag('fire', false)}
+              >
+                Fire
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <aside className="sidebar">
