@@ -37,21 +37,51 @@ type AppEnv = {
   VITE_SUPPORT_URL?: string;
   VITE_BUYMEACOFFEE_URL?: string;
   VITE_STRIPE_DONATE_URL?: string;
+  VITE_FEEDBACK_URL?: string;
+  VITE_BUG_REPORT_URL?: string;
   VITE_GA_MEASUREMENT_ID?: string;
   VITE_ANALYTICS_SCRIPT_URL?: string;
   VITE_ANALYTICS_ATTR_NAME?: string;
   VITE_ANALYTICS_ATTR_VALUE?: string;
 };
 
+type UserReportSeverity = 'low' | 'medium' | 'high';
+
+type UserReportPayload = {
+  title: string;
+  severity: UserReportSeverity;
+  steps: string;
+  expected: string;
+  generatedAt: string;
+  pageUrl: string;
+  browser: string;
+  language: string;
+  timezone: string;
+  joined: boolean;
+  observer: boolean;
+  lobbyId: string | null;
+  lobbyName: string | null;
+  mode: GameMode | 'none';
+  mapId: string | null;
+  mapName: string | null;
+  phase: string;
+  activePlayers: number | null;
+  connectedClients: number | null;
+  scoreboard: { red: number; blue: number } | null;
+};
+
 const appEnv = ((import.meta as { env?: AppEnv }).env ?? {}) as AppEnv;
 const BUY_ME_A_COFFEE_URL = (appEnv.VITE_BUYMEACOFFEE_URL?.trim() ?? appEnv.VITE_SUPPORT_URL?.trim() ?? '');
 const STRIPE_DONATE_URL = appEnv.VITE_STRIPE_DONATE_URL?.trim() ?? '';
 const HAS_SUPPORT_LINKS = Boolean(BUY_ME_A_COFFEE_URL || STRIPE_DONATE_URL);
+const FEEDBACK_URL = appEnv.VITE_FEEDBACK_URL?.trim() ?? '';
+const BUG_REPORT_URL = appEnv.VITE_BUG_REPORT_URL?.trim() ?? '';
 const GA_MEASUREMENT_ID = appEnv.VITE_GA_MEASUREMENT_ID?.trim() ?? '';
 const ANALYTICS_SCRIPT_URL = appEnv.VITE_ANALYTICS_SCRIPT_URL?.trim() ?? '';
 const ANALYTICS_ATTR_NAME = appEnv.VITE_ANALYTICS_ATTR_NAME?.trim() ?? '';
 const ANALYTICS_ATTR_VALUE = appEnv.VITE_ANALYTICS_ATTR_VALUE?.trim() ?? '';
 const UI_SNAPSHOT_INTERVAL_MS = 100;
+const HAS_TOPBAR_ACTIONS = Boolean(HAS_SUPPORT_LINKS || FEEDBACK_URL || BUG_REPORT_URL);
 
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
@@ -84,6 +114,12 @@ export default function App() {
   const [kickTargetPlayerId, setKickTargetPlayerId] = useState('');
   const [adminSettings, setAdminSettings] = useState<ModeSettings>(DEFAULT_MODE_SETTINGS);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportTitle, setReportTitle] = useState('');
+  const [reportSteps, setReportSteps] = useState('');
+  const [reportExpected, setReportExpected] = useState('');
+  const [reportSeverity, setReportSeverity] = useState<UserReportSeverity>('medium');
+  const [reportStatus, setReportStatus] = useState('');
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<GameSnapshot | null>(null);
@@ -432,6 +468,89 @@ export default function App() {
     pushInput();
   }
 
+  function buildReportPayload(): UserReportPayload {
+    return {
+      title: reportTitle.trim(),
+      severity: reportSeverity,
+      steps: reportSteps.trim(),
+      expected: reportExpected.trim(),
+      generatedAt: new Date().toISOString(),
+      pageUrl: window.location.href,
+      browser: navigator.userAgent,
+      language: navigator.language,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      joined,
+      observer,
+      lobbyId: currentLobby?.id ?? null,
+      lobbyName: currentLobby?.name ?? null,
+      mode: snapshot?.mode ?? 'none',
+      mapId: snapshot?.map.id ?? null,
+      mapName: snapshot?.map.name ?? null,
+      phase: snapshot?.phase ?? 'none',
+      activePlayers: snapshot?.activePlayers ?? null,
+      connectedClients: snapshot?.connectedClients ?? null,
+      scoreboard: snapshot ? { red: snapshot.score.red, blue: snapshot.score.blue } : null,
+    };
+  }
+
+  function toReportMarkdown(payload: UserReportPayload) {
+    return [
+      '## Summary',
+      payload.title || '(no title provided)',
+      '',
+      '## Severity',
+      payload.severity,
+      '',
+      '## Steps To Reproduce',
+      payload.steps || '(not provided)',
+      '',
+      '## Expected Result',
+      payload.expected || '(not provided)',
+      '',
+      '## Auto-Captured Context',
+      '```json',
+      JSON.stringify(payload, null, 2),
+      '```',
+    ].join('\n');
+  }
+
+  function buildIssueDraftUrl(payload: UserReportPayload) {
+    if (!BUG_REPORT_URL) {
+      return '';
+    }
+    const params = new URLSearchParams();
+    params.set('title', `[User Report] ${payload.title || 'Untitled issue'}`);
+    params.set('labels', 'bug,user-report');
+    params.set('body', toReportMarkdown(payload));
+    const separator = BUG_REPORT_URL.includes('?') ? '&' : '?';
+    return `${BUG_REPORT_URL}${separator}${params.toString()}`;
+  }
+
+  async function copyReportJson() {
+    const payload = buildReportPayload();
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setReportStatus('Report JSON copied to clipboard.');
+    } catch {
+      setReportStatus('Could not access clipboard.');
+    }
+  }
+
+  function openIssueDraft() {
+    if (!reportTitle.trim() || !reportSteps.trim()) {
+      setReportStatus('Please fill at least title and steps to reproduce.');
+      return;
+    }
+    const payload = buildReportPayload();
+    const issueUrl = buildIssueDraftUrl(payload);
+    if (!issueUrl) {
+      setReportStatus('Bug report URL is not configured.');
+      return;
+    }
+    window.open(issueUrl, '_blank', 'noopener,noreferrer');
+    setReportStatus('Opened prefilled report draft in a new tab.');
+  }
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -439,9 +558,9 @@ export default function App() {
           <p className="eyebrow">Tactical Arena Warfare</p>
           <h1>ShellStorm</h1>
         </div>
-        {HAS_SUPPORT_LINKS ? (
+        {HAS_TOPBAR_ACTIONS ? (
           <div className="topbarSupport" aria-label="Support links">
-            <span className="topbarSupportLabel">Support</span>
+            <span className="topbarSupportLabel">Support & feedback</span>
             {STRIPE_DONATE_URL ? (
               <a
                 className="supportIconLink"
@@ -471,9 +590,87 @@ export default function App() {
                 </svg>
               </a>
             ) : null}
+            {FEEDBACK_URL ? (
+              <a
+                className="supportIconLink feedback"
+                href={FEEDBACK_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Share feedback"
+                title="Share feedback"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H9l-4.7 4.3A.9.9 0 0 1 3 18.7V5.5Zm2-.5a.5.5 0 0 0-.5.5v11.2L8.2 14H17.5a.5.5 0 0 0 .5-.5v-8a.5.5 0 0 0-.5-.5H6Z" />
+                  <path d="M8 8h8a1 1 0 1 1 0 2H8a1 1 0 0 1 0-2Zm0 4h5a1 1 0 1 1 0 2H8a1 1 0 0 1 0-2Z" />
+                </svg>
+              </a>
+            ) : null}
+            {BUG_REPORT_URL ? (
+              <button
+                type="button"
+                className="supportIconLink report"
+                onClick={() => {
+                  setReportOpen(true);
+                  setReportStatus('');
+                }}
+                aria-label="Report a bug"
+                title="Report a bug"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 2a3 3 0 0 1 3 3v1h2a2 2 0 0 1 2 2v1h1a1 1 0 1 1 0 2h-1v2h1a1 1 0 1 1 0 2h-1v1a2 2 0 0 1-2 2h-2.2a4 4 0 0 1-5.6 0H7a2 2 0 0 1-2-2v-1H4a1 1 0 1 1 0-2h1v-2H4a1 1 0 1 1 0-2h1V8a2 2 0 0 1 2-2h2V5a3 3 0 0 1 3-3Zm0 2a1 1 0 0 0-1 1v1h2V5a1 1 0 0 0-1-1Zm-3 4H7v8h10V8H9Zm3 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" />
+                </svg>
+              </button>
+            ) : null}
           </div>
         ) : null}
       </header>
+
+      {reportOpen ? (
+        <div className="reportModalBackdrop" role="presentation" onClick={() => setReportOpen(false)}>
+          <div className="reportModalCard" role="dialog" aria-modal="true" aria-label="Report a bug" onClick={(event) => event.stopPropagation()}>
+            <h2>Report a bug</h2>
+            <p className="reportIntro">Send a structured report with auto-captured game and browser context.</p>
+            <label className="field">
+              <span>Title</span>
+              <input value={reportTitle} onChange={(event) => setReportTitle(event.target.value)} maxLength={120} placeholder="Short summary" />
+            </label>
+            <label className="field">
+              <span>Severity</span>
+              <select value={reportSeverity} onChange={(event) => setReportSeverity(event.target.value as UserReportSeverity)}>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Steps to reproduce</span>
+              <textarea
+                value={reportSteps}
+                onChange={(event) => setReportSteps(event.target.value)}
+                maxLength={2000}
+                rows={5}
+                placeholder="1) ... 2) ... 3) ..."
+              />
+            </label>
+            <label className="field">
+              <span>Expected result</span>
+              <textarea
+                value={reportExpected}
+                onChange={(event) => setReportExpected(event.target.value)}
+                maxLength={1000}
+                rows={3}
+                placeholder="What should happen instead"
+              />
+            </label>
+            <div className="reportActions">
+              <button type="button" onClick={openIssueDraft}>Open issue draft</button>
+              <button type="button" className="quietButton" onClick={copyReportJson}>Copy report JSON</button>
+              <button type="button" className="quietButton" onClick={() => setReportOpen(false)}>Close</button>
+            </div>
+            {reportStatus ? <p className="reportStatus">{reportStatus}</p> : null}
+          </div>
+        </div>
+      ) : null}
 
       {announcement ? <div className="announcement">{announcement}</div> : null}
 
