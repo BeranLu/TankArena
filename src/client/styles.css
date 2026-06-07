@@ -105,6 +105,14 @@ select {
   gap: 10px;
 }
 
+.topbarSupportLabel {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--accent-warm);

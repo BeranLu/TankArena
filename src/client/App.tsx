@@ -441,6 +441,7 @@ export default function App() {
         </div>
         {HAS_SUPPORT_LINKS ? (
           <div className="topbarSupport" aria-label="Support links">
+            <span className="topbarSupportLabel">Support</span>
             {STRIPE_DONATE_URL ? (
               <a
                 className="supportIconLink"
