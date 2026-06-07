@@ -1471,6 +1471,26 @@ function pickBotCombatTarget(bot: PlayerState) {
   if (state.phase === 'running' && state.mode === 'protect-the-king' && (bot.team === 'red' || bot.team === 'blue')) {
     const enemyTeam: Exclude<TeamId, 'observer' | 'none'> = bot.team === 'red' ? 'blue' : 'red';
     const enemyKing = getTeamKing(enemyTeam);
+    const enemyPlayers = Array.from(state.players.values()).filter((candidate) => {
+      if (candidate.id === bot.id || candidate.observer || candidate.health <= 0) {
+        return false;
+      }
+      return candidate.team === enemyTeam;
+    });
+
+    const inRangeNonKing = enemyPlayers
+      .filter((candidate) => !candidate.isKing)
+      .map((candidate) => ({
+        candidate,
+        d: distance(bot.x, bot.y, candidate.x, candidate.y),
+      }))
+      .filter(({ candidate, d }) => d <= 320 && !isPathBlocked(bot.x, bot.y, candidate.x, candidate.y, BULLET_RADIUS))
+      .sort((left, right) => left.d - right.d);
+
+    if (inRangeNonKing.length > 0) {
+      return inRangeNonKing[0].candidate;
+    }
+
     if (enemyKing && enemyKing.health > 0) {
       return enemyKing;
     }

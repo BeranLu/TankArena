@@ -1,5 +1,10 @@
 export type Team = 'red' | 'blue';
 
+export type Point = {
+  x: number;
+  y: number;
+};
+
 export type BotAction = {
   throttle: number;
   turn: number;
@@ -16,6 +21,22 @@ export type BotSnapshot = {
   hp: number;
   alive: boolean;
   cooldown: number;
+  carryingFlag: boolean;
+};
+
+export type CtfFlagContext = {
+  home: Point;
+  position: Point;
+  carriedBy: string | null;
+};
+
+export type CtfContext = {
+  redBase: Point;
+  blueBase: Point;
+  redFlag: CtfFlagContext;
+  blueFlag: CtfFlagContext;
+  pickupRadius: number;
+  captureRadius: number;
 };
 
 export type ScenarioContext = {
@@ -24,6 +45,7 @@ export type ScenarioContext = {
   height: number;
   bots: BotSnapshot[];
   obstacles: Obstacle[];
+  ctf?: CtfContext;
 };
 
 export type Obstacle = {
@@ -60,6 +82,14 @@ export type ScenarioConfig = {
   scoreLimit: number;
   obstacles?: Obstacle[];
   controlPoint?: { x: number; y: number; radius: number };
+  ctf?: {
+    redBase: Point;
+    blueBase: Point;
+    redFlag: Point;
+    blueFlag: Point;
+    pickupRadius: number;
+    captureRadius: number;
+  };
   spawns: Spawn[];
 };
 
@@ -94,6 +124,7 @@ export type TraceBotState = {
   hp: number;
   alive: boolean;
   cooldown: number;
+  carryingFlag: boolean;
   action: BotAction;
 };
 
@@ -134,6 +165,8 @@ export type ScenarioAggregate = {
 
 type MutableBot = BotSnapshot;
 type MutableTeamMetrics = Omit<TeamMetrics, 'accuracy'>;
+type RuntimeCtfFlagState = CtfFlagContext;
+type RuntimeCtfState = CtfContext;
 
 const DT = 0.05;
 const SPEED = 115;
@@ -144,6 +177,7 @@ const FIRE_ARC = 0.2;
 const DAMAGE = 14;
 const BOT_RADIUS = 12;
 const CONTROL_GAIN_PER_SEC = 1;
+const WALL_CLEARANCE = BOT_RADIUS * 2.8;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -164,13 +198,31 @@ function wrapAngle(angle: number) {
   return next;
 }
 
-function buildContext(bots: MutableBot[], scenario: ScenarioConfig, time: number): ScenarioContext {
+function cloneFlagState(flag: RuntimeCtfFlagState): CtfFlagContext {
+  return {
+    home: { ...flag.home },
+    position: { ...flag.position },
+    carriedBy: flag.carriedBy,
+  };
+}
+
+function buildContext(bots: MutableBot[], scenario: ScenarioConfig, time: number, ctfState?: RuntimeCtfState | null): ScenarioContext {
   return {
     time,
     width: scenario.width,
     height: scenario.height,
     bots: bots.map((bot) => ({ ...bot })),
     obstacles: scenario.obstacles ?? [],
+    ctf: ctfState
+      ? {
+        redBase: { ...ctfState.redBase },
+        blueBase: { ...ctfState.blueBase },
+        redFlag: cloneFlagState(ctfState.redFlag),
+        blueFlag: cloneFlagState(ctfState.blueFlag),
+        pickupRadius: ctfState.pickupRadius,
+        captureRadius: ctfState.captureRadius,
+      }
+      : undefined,
   };
 }
 
@@ -258,6 +310,91 @@ function findNearestEnemy(self: BotSnapshot, context: ScenarioContext) {
   return best;
 }
 
+function getWallAvoidanceVector(self: BotSnapshot, context: ScenarioContext) {
+  let x = 0;
+  let y = 0;
+
+  if (self.x < WALL_CLEARANCE) {
+    x += (WALL_CLEARANCE - self.x) / WALL_CLEARANCE;
+  }
+  if (context.width - self.x < WALL_CLEARANCE) {
+    x -= (WALL_CLEARANCE - (context.width - self.x)) / WALL_CLEARANCE;
+  }
+  if (self.y < WALL_CLEARANCE) {
+    y += (WALL_CLEARANCE - self.y) / WALL_CLEARANCE;
+  }
+  if (context.height - self.y < WALL_CLEARANCE) {
+    y -= (WALL_CLEARANCE - (context.height - self.y)) / WALL_CLEARANCE;
+  }
+
+  for (const obstacle of context.obstacles) {
+    const nearestX = clamp(self.x, obstacle.x, obstacle.x + obstacle.width);
+    const nearestY = clamp(self.y, obstacle.y, obstacle.y + obstacle.height);
+    let dx = self.x - nearestX;
+    let dy = self.y - nearestY;
+    let d = Math.hypot(dx, dy);
+    if (d >= WALL_CLEARANCE) {
+      continue;
+    }
+    if (d < 0.001) {
+      dx = self.x - (obstacle.x + obstacle.width / 2);
+      dy = self.y - (obstacle.y + obstacle.height / 2);
+      d = Math.hypot(dx, dy) || 1;
+    }
+    const strength = (WALL_CLEARANCE - d) / WALL_CLEARANCE;
+    x += (dx / d) * strength * 1.4;
+    y += (dy / d) * strength * 1.4;
+  }
+
+  return { x, y };
+}
+
+function applyWallSafety(self: BotSnapshot, context: ScenarioContext, turn: number, throttle: number) {
+  const avoidance = getWallAvoidanceVector(self, context);
+  if (Math.abs(avoidance.x) + Math.abs(avoidance.y) < 0.001) {
+    return { turn, throttle };
+  }
+
+  const avoidAngle = Math.atan2(avoidance.y, avoidance.x);
+  const avoidDelta = wrapAngle(avoidAngle - self.heading);
+  let nextTurn = clamp(turn + avoidDelta * 1.35, -1, 1);
+  let nextThrottle = throttle;
+
+  if (Math.abs(avoidDelta) > 0.55) {
+    nextThrottle = throttle > 0 ? Math.min(throttle, 0.45) : Math.max(throttle, -0.55);
+  }
+
+  const probeHeading = nextThrottle >= 0 ? self.heading : wrapAngle(self.heading + Math.PI);
+  const probeX = self.x + Math.cos(probeHeading) * WALL_CLEARANCE;
+  const probeY = self.y + Math.sin(probeHeading) * WALL_CLEARANCE;
+  const probeBlocked = probeX < BOT_RADIUS || probeY < BOT_RADIUS || probeX > context.width - BOT_RADIUS || probeY > context.height - BOT_RADIUS
+    || collidesObstacle(probeX, probeY, BOT_RADIUS + 2, context.obstacles);
+  if (probeBlocked) {
+    nextTurn = clamp(nextTurn + avoidDelta * 0.8, -1, 1);
+    nextThrottle = nextThrottle > 0 ? Math.min(nextThrottle, 0.2) : Math.max(nextThrottle, -0.3);
+  }
+
+  return {
+    turn: nextTurn,
+    throttle: nextThrottle,
+  };
+}
+
+function getCtfObjectivePoint(self: BotSnapshot, context: ScenarioContext) {
+  if (!context.ctf) {
+    return null;
+  }
+  const ownBase = self.team === 'red' ? context.ctf.redBase : context.ctf.blueBase;
+  const enemyFlag = self.team === 'red' ? context.ctf.blueFlag : context.ctf.redFlag;
+  if (self.carryingFlag) {
+    return ownBase;
+  }
+  if (enemyFlag.carriedBy) {
+    return null;
+  }
+  return enemyFlag.position;
+}
+
 function findNearestVisibleEnemy(self: BotSnapshot, context: ScenarioContext) {
   let best: BotSnapshot | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
@@ -332,6 +469,19 @@ function getLineOfSightWaypoint(self: BotSnapshot, enemy: BotSnapshot, context: 
 export const chaserPolicy: BotPolicy = {
   name: 'chaser',
   decide(self, context) {
+    const ctfObjective = getCtfObjectivePoint(self, context);
+    if (ctfObjective) {
+      const objectiveAngle = Math.atan2(ctfObjective.y - self.y, ctfObjective.x - self.x);
+      const objectiveDelta = wrapAngle(objectiveAngle - self.heading);
+      const safe = applyWallSafety(self, context, clamp(objectiveDelta * 2.2, -1, 1), distance(self.x, self.y, ctfObjective.x, ctfObjective.y) > 65 ? 1 : 0.2);
+      return {
+        throttle: safe.throttle,
+        turn: safe.turn,
+        fire: false,
+        targetId: undefined,
+      };
+    }
+
     const enemy = findNearestVisibleEnemy(self, context) ?? findNearestEnemy(self, context);
     if (!enemy) {
       return { throttle: 0, turn: 0.2, fire: false };
@@ -350,9 +500,11 @@ export const chaserPolicy: BotPolicy = {
     const fireAngle = wrapAngle(Math.atan2(enemy.y - self.y, enemy.x - self.x) - self.heading);
     const hasLineOfSight = !isLineBlocked(self.x, self.y, enemy.x, enemy.y, context.obstacles);
 
+    const safe = applyWallSafety(self, context, turn, throttle);
+
     return {
-      throttle,
-      turn,
+      throttle: safe.throttle,
+      turn: safe.turn,
       fire: hasLineOfSight && Math.abs(fireAngle) < FIRE_ARC,
       targetId: enemy.id,
     };
@@ -362,6 +514,18 @@ export const chaserPolicy: BotPolicy = {
 export const kiterPolicy: BotPolicy = {
   name: 'kiter',
   decide(self, context, rng) {
+    const ctfObjective = getCtfObjectivePoint(self, context);
+    if (ctfObjective) {
+      const objectiveAngle = Math.atan2(ctfObjective.y - self.y, ctfObjective.x - self.x);
+      const objectiveDelta = wrapAngle(objectiveAngle - self.heading);
+      const safe = applyWallSafety(self, context, clamp(objectiveDelta * 2.1, -1, 1), distance(self.x, self.y, ctfObjective.x, ctfObjective.y) > 70 ? 0.85 : 0.2);
+      return {
+        throttle: safe.throttle,
+        turn: safe.turn,
+        fire: false,
+      };
+    }
+
     const enemies = context.bots
       .filter((candidate) => candidate.alive && candidate.team !== self.team && candidate.id !== self.id)
       .sort((left, right) => distance(self.x, self.y, left.x, left.y) - distance(self.x, self.y, right.x, right.y));
@@ -380,9 +544,10 @@ export const kiterPolicy: BotPolicy = {
       const waypoint = getLineOfSightWaypoint(self, nearestEnemy, context);
       const waypointAngle = Math.atan2(waypoint.y - self.y, waypoint.x - self.x);
       const waypointDelta = wrapAngle(waypointAngle - self.heading);
+      const safe = applyWallSafety(self, context, clamp(waypointDelta * 2, -1, 1), Math.abs(waypointDelta) > 0.7 ? 0.35 : 0.75);
       return {
-        throttle: Math.abs(waypointDelta) > 0.7 ? 0.35 : 0.75,
-        turn: clamp(waypointDelta * 2, -1, 1),
+        throttle: safe.throttle,
+        turn: safe.turn,
         fire: false,
         targetId: nearestEnemy.id,
       };
@@ -405,9 +570,10 @@ export const kiterPolicy: BotPolicy = {
         ? Math.sign((nearbyThreats[0].y + nearbyThreats[nearbyThreats.length - 1].y) / 2 - self.y) * 0.28
         : 0;
 
+      const safe = applyWallSafety(self, context, clamp(primaryAngle * 2.4 + centerDelta * 0.35 + flankBias, -1, 1), nearestDistance < 210 ? -1 : -0.6);
       return {
-        throttle: nearestDistance < 210 ? -1 : -0.6,
-        turn: clamp(primaryAngle * 2.4 + centerDelta * 0.35 + flankBias, -1, 1),
+        throttle: safe.throttle,
+        turn: safe.turn,
         fire: Boolean(visibleEnemy) && Math.abs(primaryAngle) < FIRE_ARC * 0.9,
         targetId: primaryThreat.id,
       };
@@ -420,9 +586,11 @@ export const kiterPolicy: BotPolicy = {
     const turn = clamp(angleDelta * 2 + strafeBias, -1, 1);
     const hasLineOfSight = !isLineBlocked(self.x, self.y, enemy.x, enemy.y, context.obstacles);
 
+    const safe = applyWallSafety(self, context, turn, throttle);
+
     return {
-      throttle,
-      turn,
+      throttle: safe.throttle,
+      turn: safe.turn,
       fire: hasLineOfSight && Math.abs(angleDelta) < FIRE_ARC * 0.95,
       targetId: enemy.id,
     };
@@ -457,6 +625,85 @@ export const defaultScenarios: ScenarioConfig[] = [
       { id: 'b1', team: 'blue', x: 1100, y: 180, heading: Math.PI },
       { id: 'b2', team: 'blue', x: 1100, y: 380, heading: Math.PI },
       { id: 'b3', team: 'blue', x: 1100, y: 580, heading: Math.PI },
+    ],
+  },
+  {
+    id: 'ctf_lane_raid',
+    label: 'Capture the Flag Lane Raid',
+    width: 1280,
+    height: 760,
+    maxTimeSec: 120,
+    scoreLimit: 3,
+    obstacles: [
+      { x: 420, y: 120, width: 440, height: 40 },
+      { x: 420, y: 600, width: 440, height: 40 },
+      { x: 600, y: 220, width: 80, height: 320 },
+      { x: 130, y: 300, width: 120, height: 160 },
+      { x: 1030, y: 300, width: 120, height: 160 },
+    ],
+    ctf: {
+      redBase: { x: 300, y: 380 },
+      blueBase: { x: 980, y: 380 },
+      redFlag: { x: 340, y: 380 },
+      blueFlag: { x: 940, y: 380 },
+      pickupRadius: 28,
+      captureRadius: 38,
+    },
+    spawns: [
+      { id: 'r1', team: 'red', x: 170, y: 180, heading: 0 },
+      { id: 'r2', team: 'red', x: 170, y: 380, heading: 0 },
+      { id: 'r3', team: 'red', x: 170, y: 580, heading: 0 },
+      { id: 'b1', team: 'blue', x: 1110, y: 180, heading: Math.PI },
+      { id: 'b2', team: 'blue', x: 1110, y: 380, heading: Math.PI },
+      { id: 'b3', team: 'blue', x: 1110, y: 580, heading: Math.PI },
+    ],
+  },
+  {
+    id: 'king_corridor_hold',
+    label: 'Protect the King Corridor Hold',
+    width: 1180,
+    height: 720,
+    maxTimeSec: 110,
+    scoreLimit: 999,
+    obstacles: [
+      { x: 320, y: 120, width: 540, height: 40 },
+      { x: 320, y: 560, width: 540, height: 40 },
+      { x: 500, y: 220, width: 70, height: 280 },
+      { x: 610, y: 220, width: 70, height: 280 },
+      { x: 130, y: 250, width: 90, height: 220 },
+      { x: 960, y: 250, width: 90, height: 220 },
+    ],
+    spawns: [
+      { id: 'r1', team: 'red', x: 180, y: 200, heading: 0 },
+      { id: 'r2', team: 'red', x: 180, y: 360, heading: 0 },
+      { id: 'r3', team: 'red', x: 180, y: 520, heading: 0 },
+      { id: 'b1', team: 'blue', x: 1000, y: 200, heading: Math.PI },
+      { id: 'b2', team: 'blue', x: 1000, y: 360, heading: Math.PI },
+      { id: 'b3', team: 'blue', x: 1000, y: 520, heading: Math.PI },
+    ],
+  },
+  {
+    id: 'control_tri_hold',
+    label: 'Control Points Triangle Hold',
+    width: 1260,
+    height: 780,
+    maxTimeSec: 120,
+    scoreLimit: 999,
+    controlPoint: { x: 630, y: 390, radius: 120 },
+    obstacles: [
+      { x: 250, y: 120, width: 120, height: 220 },
+      { x: 890, y: 440, width: 120, height: 220 },
+      { x: 540, y: 250, width: 180, height: 280 },
+      { x: 180, y: 520, width: 150, height: 90 },
+      { x: 930, y: 170, width: 150, height: 90 },
+    ],
+    spawns: [
+      { id: 'r1', team: 'red', x: 150, y: 180, heading: 0 },
+      { id: 'r2', team: 'red', x: 150, y: 390, heading: 0 },
+      { id: 'r3', team: 'red', x: 150, y: 600, heading: 0 },
+      { id: 'b1', team: 'blue', x: 1110, y: 180, heading: Math.PI },
+      { id: 'b2', team: 'blue', x: 1110, y: 390, heading: Math.PI },
+      { id: 'b3', team: 'blue', x: 1110, y: 600, heading: Math.PI },
     ],
   },
   {
@@ -543,7 +790,18 @@ export function runScenario(config: ScenarioConfig, policies: SimPolicyPack, see
     hp: 100,
     alive: true,
     cooldown: 0,
+    carryingFlag: false,
   }));
+  const ctfState: RuntimeCtfState | null = config.ctf
+    ? {
+      redBase: { ...config.ctf.redBase },
+      blueBase: { ...config.ctf.blueBase },
+      redFlag: { home: { ...config.ctf.redFlag }, position: { ...config.ctf.redFlag }, carriedBy: null },
+      blueFlag: { home: { ...config.ctf.blueFlag }, position: { ...config.ctf.blueFlag }, carriedBy: null },
+      pickupRadius: config.ctf.pickupRadius,
+      captureRadius: config.ctf.captureRadius,
+    }
+    : null;
 
   const metrics = {
     red: makeMetrics('red'),
@@ -556,7 +814,7 @@ export function runScenario(config: ScenarioConfig, policies: SimPolicyPack, see
 
   for (let step = 0; step < maxSteps; step += 1) {
     elapsed = step * DT;
-    const context = buildContext(bots, config, elapsed);
+    const context = buildContext(bots, config, elapsed, ctfState);
 
     const actions = new Map<string, BotAction>();
     for (const bot of bots) {
@@ -658,6 +916,49 @@ export function runScenario(config: ScenarioConfig, policies: SimPolicyPack, see
       }
     }
 
+    if (ctfState) {
+      const syncFlag = (flag: RuntimeCtfFlagState) => {
+        if (!flag.carriedBy) {
+          return;
+        }
+        const carrier = bots.find((bot) => bot.id === flag.carriedBy && bot.alive);
+        if (!carrier) {
+          flag.carriedBy = null;
+          flag.position = { ...flag.home };
+          return;
+        }
+        flag.position = { x: carrier.x, y: carrier.y };
+      };
+
+      syncFlag(ctfState.redFlag);
+      syncFlag(ctfState.blueFlag);
+
+      for (const bot of bots) {
+        if (!bot.alive) {
+          continue;
+        }
+        const ownBase = bot.team === 'red' ? ctfState.redBase : ctfState.blueBase;
+        const enemyFlag = bot.team === 'red' ? ctfState.blueFlag : ctfState.redFlag;
+
+        if (!bot.carryingFlag && enemyFlag.carriedBy === null && distance(bot.x, bot.y, enemyFlag.position.x, enemyFlag.position.y) <= ctfState.pickupRadius) {
+          enemyFlag.carriedBy = bot.id;
+          enemyFlag.position = { x: bot.x, y: bot.y };
+          bot.carryingFlag = true;
+        }
+
+        if (bot.carryingFlag && distance(bot.x, bot.y, ownBase.x, ownBase.y) <= ctfState.captureRadius) {
+          const teamMetrics = bot.team === 'red' ? metrics.red : metrics.blue;
+          teamMetrics.controlScore += 1;
+          enemyFlag.carriedBy = null;
+          enemyFlag.position = { ...enemyFlag.home };
+          bot.carryingFlag = false;
+        }
+      }
+
+      syncFlag(ctfState.redFlag);
+      syncFlag(ctfState.blueFlag);
+    }
+
     if (captureTrace && step % traceEverySteps === 0) {
       traceFrames.push({
         step,
@@ -673,6 +974,7 @@ export function runScenario(config: ScenarioConfig, policies: SimPolicyPack, see
           hp: bot.hp,
           alive: bot.alive,
           cooldown: bot.cooldown,
+          carryingFlag: bot.carryingFlag,
           action: actions.get(bot.id) ?? { throttle: 0, turn: 0, fire: false },
         })),
       });
@@ -680,7 +982,10 @@ export function runScenario(config: ScenarioConfig, policies: SimPolicyPack, see
 
     const redAlive = bots.some((bot) => bot.alive && bot.team === 'red');
     const blueAlive = bots.some((bot) => bot.alive && bot.team === 'blue');
-    if (!redAlive || !blueAlive) {
+    if (!redAlive && !blueAlive) {
+      break;
+    }
+    if (!config.ctf && (!redAlive || !blueAlive)) {
       break;
     }
     if (metrics.red.controlScore >= config.scoreLimit || metrics.blue.controlScore >= config.scoreLimit) {

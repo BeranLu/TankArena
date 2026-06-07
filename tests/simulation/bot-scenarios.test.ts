@@ -47,6 +47,39 @@ describe('Bot simulation scenarios', () => {
     expect(aggregate.avgBlueDamage + aggregate.avgRedDamage).toBeGreaterThan(0);
   });
 
+  it('includes mode-inspired layouts for ctf, king, and control-point testing', () => {
+    const scenarioIds = ['ctf_lane_raid', 'king_corridor_hold', 'control_tri_hold'];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = defaultScenarios.find((entry) => entry.id === scenarioId);
+      expect(scenario, `${scenarioId} missing`).toBeTruthy();
+
+      const result = runScenario(scenario!, { red: chaserPolicy, blue: chaserPolicy }, 6101);
+      expect(result.elapsedSec).toBeGreaterThan(0);
+      expect(['red', 'blue', 'draw']).toContain(result.winner);
+    }
+  });
+
+  it('allows uncontested ctf objective completion when no enemies are present', () => {
+    const base = defaultScenarios.find((entry) => entry.id === 'ctf_lane_raid');
+    expect(base).toBeTruthy();
+
+    const uncontested = {
+      ...base!,
+      id: 'ctf_uncontested_red_only',
+      label: 'Capture the Flag Uncontested (Red Only)',
+      scoreLimit: 1,
+      maxTimeSec: 80,
+      spawns: base!.spawns.filter((spawn) => spawn.team === 'red').slice(0, 1),
+    };
+
+    const result = runScenario(uncontested, { red: chaserPolicy, blue: chaserPolicy }, 9901);
+
+    expect(result.winner).toBe('red');
+    expect(result.red.controlScore).toBeGreaterThanOrEqual(1);
+    expect(result.elapsedSec).toBeLessThan(80);
+  });
+
   it('keeps damage near zero when a solid wall separates tanks', () => {
     const scenario = defaultScenarios.find((entry) => entry.id === 'wall_blocked_duel');
     expect(scenario).toBeTruthy();
