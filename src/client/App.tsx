@@ -97,7 +97,8 @@ const AIM_JOYSTICK_MAX_OFFSET = 38;
 const AIM_JOYSTICK_DEADZONE = 0.18;
 const AIM_DISTANCE = 220;
 
-type MobileControlMode = 'joystick' | 'buttons';
+type MobileControlMode = 'joystick' | 'buttons' | 'arena-sticks';
+type StickVisualState = { active: boolean; centerX: number; centerY: number; x: number; y: number };
 
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
@@ -140,6 +141,8 @@ export default function App() {
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const [joystickVisual, setJoystickVisual] = useState({ active: false, x: 0, y: 0 });
   const [aimJoystickVisual, setAimJoystickVisual] = useState({ active: false, x: 0, y: 0 });
+  const [arenaMoveVisual, setArenaMoveVisual] = useState<StickVisualState>({ active: false, centerX: 0, centerY: 0, x: 0, y: 0 });
+  const [arenaAimVisual, setArenaAimVisual] = useState<StickVisualState>({ active: false, centerX: 0, centerY: 0, x: 0, y: 0 });
   const [mobileControlMode, setMobileControlMode] = useState<MobileControlMode>('joystick');
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
@@ -153,6 +156,10 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const joystickPointerIdRef = useRef<number | null>(null);
   const aimJoystickPointerIdRef = useRef<number | null>(null);
+  const arenaMovePointerIdRef = useRef<number | null>(null);
+  const arenaAimPointerIdRef = useRef<number | null>(null);
+
+  const isArenaStickMode = isCoarsePointer && mobileControlMode === 'arena-sticks';
 
   useEffect(() => {
     socketRef.current = socket;
@@ -581,6 +588,40 @@ export default function App() {
     setInputFlag('fire', false);
   }
 
+  function resetArenaMoveStick() {
+    arenaMovePointerIdRef.current = null;
+    setArenaMoveVisual({ active: false, centerX: 0, centerY: 0, x: 0, y: 0 });
+    setAnalogMovement(0, 0);
+  }
+
+  function resetArenaAimStick() {
+    arenaAimPointerIdRef.current = null;
+    setArenaAimVisual({ active: false, centerX: 0, centerY: 0, x: 0, y: 0 });
+    setInputFlag('fire', false);
+  }
+
+  function clearArenaSticks() {
+    resetArenaMoveStick();
+    resetArenaAimStick();
+  }
+
+  function getStickOffset(clientX: number, clientY: number, centerX: number, centerY: number, maxOffset: number) {
+    const rawX = clientX - centerX;
+    const rawY = clientY - centerY;
+    const distance = Math.hypot(rawX, rawY);
+    const cappedDistance = Math.min(distance, maxOffset);
+    const safeDistance = distance || 1;
+    const x = (rawX / safeDistance) * cappedDistance;
+    const y = (rawY / safeDistance) * cappedDistance;
+    return {
+      x,
+      y,
+      nx: x / maxOffset,
+      ny: y / maxOffset,
+      magnitude: Math.hypot(x / maxOffset, y / maxOffset),
+    };
+  }
+
   function updateJoystickFromPoint(clientX: number, clientY: number, element: HTMLDivElement) {
     const rect = element.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
@@ -962,32 +1003,163 @@ export default function App() {
             width={960}
             height={640}
             onPointerDown={(event) => {
-              if (!joined || observer || event.pointerType !== 'touch' || isCoarsePointer) {
+              if (!joined || observer || event.pointerType !== 'touch') {
                 return;
               }
+
+              if (isArenaStickMode) {
+                const canvas = event.currentTarget as HTMLCanvasElement;
+                const rect = canvas.getBoundingClientRect();
+                const pointerX = event.clientX - rect.left;
+                const isLeftZone = pointerX < rect.width / 2;
+
+                if (isLeftZone) {
+                  if (arenaMovePointerIdRef.current !== null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  arenaMovePointerIdRef.current = event.pointerId;
+                  canvas.setPointerCapture(event.pointerId);
+                  const centerX = event.clientX;
+                  const centerY = event.clientY;
+                  setArenaMoveVisual({ active: true, centerX, centerY, x: 0, y: 0 });
+                  return;
+                }
+
+                if (arenaAimPointerIdRef.current !== null) {
+                  return;
+                }
+                event.preventDefault();
+                arenaAimPointerIdRef.current = event.pointerId;
+                canvas.setPointerCapture(event.pointerId);
+                const centerX = event.clientX;
+                const centerY = event.clientY;
+                setArenaAimVisual({ active: true, centerX, centerY, x: 0, y: 0 });
+                return;
+              }
+
+              if (isCoarsePointer) {
+                return;
+              }
+
               event.preventDefault();
               updateAim(event.clientX, event.clientY);
               setInputFlag('fire', true);
             }}
             onPointerMove={(event) => {
-              if (!joined || observer || event.pointerType !== 'touch' || isCoarsePointer) {
+              if (!joined || observer || event.pointerType !== 'touch') {
                 return;
               }
+
+              if (isArenaStickMode) {
+                if (event.pointerId === arenaMovePointerIdRef.current && arenaMoveVisual.active) {
+                  event.preventDefault();
+                  const offset = getStickOffset(event.clientX, event.clientY, arenaMoveVisual.centerX, arenaMoveVisual.centerY, JOYSTICK_MAX_OFFSET);
+                  setArenaMoveVisual((current) => ({ ...current, x: offset.x, y: offset.y }));
+                  if (offset.magnitude < JOYSTICK_DEADZONE) {
+                    setAnalogMovement(0, 0);
+                  } else {
+                    setAnalogMovement(offset.nx, -offset.ny);
+                  }
+                  return;
+                }
+
+                if (event.pointerId === arenaAimPointerIdRef.current && arenaAimVisual.active) {
+                  event.preventDefault();
+                  const offset = getStickOffset(event.clientX, event.clientY, arenaAimVisual.centerX, arenaAimVisual.centerY, AIM_JOYSTICK_MAX_OFFSET);
+                  setArenaAimVisual((current) => ({ ...current, x: offset.x, y: offset.y }));
+
+                  if (offset.magnitude < AIM_JOYSTICK_DEADZONE) {
+                    setInputFlag('fire', false);
+                    return;
+                  }
+
+                  const snapshot = snapshotRef.current;
+                  const socketId = socketRef.current?.id;
+                  if (!snapshot || !socketId) {
+                    return;
+                  }
+                  const self = snapshot.players.find((player) => player.id === socketId);
+                  if (!self || self.observer) {
+                    return;
+                  }
+
+                  inputRef.current.aimX = clamp(self.x + offset.nx * AIM_DISTANCE, 0, snapshot.map.width);
+                  inputRef.current.aimY = clamp(self.y + offset.ny * AIM_DISTANCE, 0, snapshot.map.height);
+                  inputRef.current.fire = true;
+                  pushInput();
+                }
+                return;
+              }
+
+              if (isCoarsePointer) {
+                return;
+              }
+
               updateAim(event.clientX, event.clientY);
             }}
             onPointerUp={(event) => {
               if (event.pointerType !== 'touch') {
                 return;
               }
+
+              if (isArenaStickMode) {
+                const canvas = event.currentTarget as HTMLCanvasElement;
+                if (event.pointerId === arenaMovePointerIdRef.current) {
+                  canvas.releasePointerCapture(event.pointerId);
+                  resetArenaMoveStick();
+                }
+                if (event.pointerId === arenaAimPointerIdRef.current) {
+                  canvas.releasePointerCapture(event.pointerId);
+                  resetArenaAimStick();
+                }
+                return;
+              }
+
               setInputFlag('fire', false);
             }}
             onPointerCancel={(event) => {
               if (event.pointerType !== 'touch') {
                 return;
               }
+
+              if (isArenaStickMode) {
+                const canvas = event.currentTarget as HTMLCanvasElement;
+                if (event.pointerId === arenaMovePointerIdRef.current) {
+                  canvas.releasePointerCapture(event.pointerId);
+                  resetArenaMoveStick();
+                }
+                if (event.pointerId === arenaAimPointerIdRef.current) {
+                  canvas.releasePointerCapture(event.pointerId);
+                  resetArenaAimStick();
+                }
+                return;
+              }
+
               setInputFlag('fire', false);
             }}
           />
+
+          {isArenaStickMode ? (
+            <div className="arenaTouchOverlay" aria-hidden="true">
+              {arenaMoveVisual.active ? (
+                <div className="arenaStick move" style={{ left: arenaMoveVisual.centerX, top: arenaMoveVisual.centerY }}>
+                  <div
+                    className="arenaStickKnob"
+                    style={{ transform: `translate(calc(-50% + ${arenaMoveVisual.x}px), calc(-50% + ${arenaMoveVisual.y}px))` }}
+                  />
+                </div>
+              ) : null}
+              {arenaAimVisual.active ? (
+                <div className="arenaStick aim" style={{ left: arenaAimVisual.centerX, top: arenaAimVisual.centerY }}>
+                  <div
+                    className="arenaStickKnob aim"
+                    style={{ transform: `translate(calc(-50% + ${arenaAimVisual.x}px), calc(-50% + ${arenaAimVisual.y}px))` }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {isFinished && snapshot?.roundResult ? (
             <div className="roundResultOverlay">
@@ -1033,6 +1205,7 @@ export default function App() {
                   type="button"
                   className={`modeBtn${mobileControlMode === 'joystick' ? ' active' : ''}`}
                   onClick={() => {
+                    clearArenaSticks();
                     resetJoystickMovement();
                     setMobileControlMode('joystick');
                   }}
@@ -1043,15 +1216,28 @@ export default function App() {
                   type="button"
                   className={`modeBtn${mobileControlMode === 'buttons' ? ' active' : ''}`}
                   onClick={() => {
+                    clearArenaSticks();
                     resetJoystickMovement();
                     setMobileControlMode('buttons');
                   }}
                 >
                   Buttons
                 </button>
+                <button
+                  type="button"
+                  className={`modeBtn${mobileControlMode === 'arena-sticks' ? ' active' : ''}`}
+                  onClick={() => {
+                    resetJoystickMovement();
+                    resetAimJoystick();
+                    setMobileControlMode('arena-sticks');
+                  }}
+                >
+                  Arena sticks
+                </button>
               </div>
 
-              <div className="mobileMovementArea">
+              {mobileControlMode !== 'arena-sticks' ? (
+                <div className="mobileMovementArea">
                 {mobileControlMode === 'joystick' ? (
                   <div
                     className="joystickPad"
@@ -1196,9 +1382,14 @@ export default function App() {
                     }}
                   />
                 </div>
-              </div>
+                </div>
+              ) : null}
 
-              <p className="mobileControlHint">Left control moves hull. Right joystick aims turret and fires while moved.</p>
+              <p className="mobileControlHint">
+                {mobileControlMode === 'arena-sticks'
+                  ? 'Touch left half to spawn move stick and right half to spawn aim/fire stick.'
+                  : 'Left control moves hull. Right joystick aims turret and fires while moved.'}
+              </p>
             </div>
           ) : null}
         </section>
