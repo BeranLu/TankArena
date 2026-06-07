@@ -763,16 +763,8 @@ export default function App() {
         <section className="panel gamePanel">
           <div className="panelHeader">
             <div>
-              <h2>{snapshot?.map.name ?? 'Arena'}</h2>
-              <p>{snapshot ? MODES[snapshot.mode] : 'Waiting for the server...'}</p>
-            </div>
-            <div className="controlsRow wrap">
-              <button type="button" onClick={() => ready(true)} disabled={!joined || observer}>
-                Ready
-              </button>
-              <button type="button" onClick={() => ready(false)} disabled={!joined || observer}>
-                Unready
-              </button>
+              <h2>Arena View</h2>
+              <p>{snapshot ? `Round phase: ${snapshot.phase}` : 'Waiting for the server...'}</p>
             </div>
           </div>
 
@@ -828,6 +820,16 @@ export default function App() {
               <div><span>Red</span><strong>{formatTeamScore(snapshot?.score.red ?? 0)}</strong></div>
               <div><span>Blue</span><strong>{formatTeamScore(snapshot?.score.blue ?? 0)}</strong></div>
               <div><span>Objective</span><strong>{activeTargetLabel}</strong></div>
+              <div><span>Map</span><strong>{snapshot?.map.name ?? '-'}</strong></div>
+              <div><span>Game type</span><strong>{snapshot ? MODES[snapshot.mode] : '-'}</strong></div>
+            </div>
+            <div className="controlsRow wrap">
+              <button type="button" onClick={() => ready(true)} disabled={!joined || observer}>
+                Ready
+              </button>
+              <button type="button" onClick={() => ready(false)} disabled={!joined || observer}>
+                Unready
+              </button>
             </div>
             <ul className="playerList">
               {sortedPlayers.map((player) => (
