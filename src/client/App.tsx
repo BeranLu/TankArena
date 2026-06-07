@@ -853,7 +853,14 @@ export default function App() {
             <ul className="playerList">
               {sortedPlayers.map((player) => (
                 <li key={player.id}>
-                  <span className="dot" style={{ background: TEAM_COLORS[player.team] }} />
+                  <span
+                    className="dot"
+                    style={{
+                      background: isLobby
+                        ? (player.ready ? '#22c55e' : '#9ca3af')
+                        : TEAM_COLORS[player.team],
+                    }}
+                  />
                   <span className="playerIdentity">
                     <strong>{player.name}{player.isBot ? ' [BOT]' : ''}{player.id === socket?.id ? ' (you)' : ''}</strong>
                      <small>{player.observer ? 'Observer' : `Team ${TEAM_LABELS[player.team]}`}</small>
