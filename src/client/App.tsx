@@ -761,13 +761,6 @@ export default function App() {
 
       {joined ? <main className="layout">
         <section className="panel gamePanel">
-          <div className="panelHeader">
-            <div>
-              <h2>Arena View</h2>
-              <p>{snapshot ? `Round phase: ${snapshot.phase}` : 'Waiting for the server...'}</p>
-            </div>
-          </div>
-
           <canvas ref={canvasRef} className="arenaCanvas" width={960} height={640} />
 
           {isFinished && snapshot?.roundResult ? (
