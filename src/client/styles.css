@@ -428,6 +428,44 @@ h1 {
   line-height: 1.4;
 }
 
+.adminPanel {
+  max-height: min(72vh, 720px);
+  overflow-y: auto;
+}
+
+.adminAccordion {
+  border: 1px solid rgba(136, 180, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(8, 12, 24, 0.55);
+  margin-bottom: 10px;
+}
+
+.adminAccordion summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #d8e6fb;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.82rem;
+}
+
+.adminAccordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.adminAccordion[open] summary {
+  border-bottom: 1px solid rgba(136, 180, 255, 0.16);
+}
+
+.adminAccordionBody {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 @media (max-width: 1120px) {
   .layout {
     flex-direction: column;
