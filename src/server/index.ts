@@ -102,6 +102,7 @@ const DEFAULT_CONTROL_POINTS_REINFORCEMENTS = 300;
 const CONTROL_POINT_CAPTURE_RADIUS = 90;
 const CONTROL_POINT_CAPTURE_RATE_PER_PLAYER = 30;
 const CONTROL_POINT_BLEED_PER_POINT_PER_SECOND = 1.2;
+const CONTROL_POINT_REINFORCEMENT_LOSS_ON_DEATH = 1;
 const BOT_NAME_PREFIX = 'BOT';
 const MAX_LOBBIES = parseLimit(process.env.MAX_LOBBIES, 8);
 const MAX_PLAYERS_PER_LOBBY = parseLimit(process.env.MAX_PLAYERS_PER_LOBBY, 10);
@@ -1817,6 +1818,15 @@ function updateProjectiles(deltaSeconds: number) {
                 finishRound(winnerTeam, `${winnerTeam} reached ${target} points.`);
                 return;
               }
+            }
+          }
+
+          if (state.phase === 'running' && state.mode === 'control-points' && (player.team === 'red' || player.team === 'blue')) {
+            state.score[player.team] = Math.max(0, state.score[player.team] - CONTROL_POINT_REINFORCEMENT_LOSS_ON_DEATH);
+            if (state.score[player.team] <= 0) {
+              const winnerTeam = player.team === 'red' ? 'Blue Team' : 'Red Team';
+              finishRound(winnerTeam, `${winnerTeam} drained all enemy reinforcements.`);
+              return;
             }
           }
         }
