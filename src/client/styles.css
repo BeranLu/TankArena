@@ -405,6 +405,21 @@ h1 {
   gap: 8px;
 }
 
+.readyStatus {
+  margin: 2px 0 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.readyStatusReady {
+  color: #86efac;
+}
+
+.readyStatusWaiting {
+  color: #fcd34d;
+}
+
 .playerList li {
   display: grid;
   grid-template-columns: 18px 1fr auto;

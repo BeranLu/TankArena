@@ -362,6 +362,17 @@ export default function App() {
   const isFinished = snapshot?.phase === 'finished';
   const canPause = snapshot?.phase === 'running' || snapshot?.phase === 'paused';
   const isDeathmatch = snapshot?.mode === 'deathmatch';
+  const localPlayer = useMemo(() => {
+    if (!snapshot || !socket) {
+      return null;
+    }
+    return snapshot.players.find((player) => player.id === socket.id) ?? null;
+  }, [snapshot, socket]);
+  const localReadyLabel = observer
+    ? 'Observer'
+    : localPlayer?.ready
+      ? 'Ready'
+      : 'Not ready';
   const transferablePlayers = useMemo(() => {
     if (!snapshot) {
       return [];
@@ -817,19 +828,22 @@ export default function App() {
               <div><span>Game type</span><strong>{snapshot ? MODES[snapshot.mode] : '-'}</strong></div>
             </div>
             <div className="controlsRow wrap">
-              <button type="button" onClick={() => ready(true)} disabled={!joined || observer}>
-                Ready
+              <button type="button" onClick={() => ready(true)} disabled={!joined || observer || !!localPlayer?.ready}>
+                Set Ready
               </button>
-              <button type="button" onClick={() => ready(false)} disabled={!joined || observer}>
-                Unready
+              <button type="button" onClick={() => ready(false)} disabled={!joined || observer || !localPlayer?.ready}>
+                Set Unready
               </button>
             </div>
+            <p className={`readyStatus ${localPlayer?.ready ? 'readyStatusReady' : 'readyStatusWaiting'}`}>
+              Your status: {localReadyLabel}
+            </p>
             <ul className="playerList">
               {sortedPlayers.map((player) => (
                 <li key={player.id}>
                   <span className="dot" style={{ background: TEAM_COLORS[player.team] }} />
                   <span>{player.name}{player.isBot ? ' [BOT]' : ''}</span>
-                  <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
+                  <span>{player.observer ? 'observer' : player.team === 'none' ? 'unassigned' : player.isKing ? 'KING' : isLobby ? (player.ready ? 'ready' : 'waiting') : isDeathmatch ? `${player.score} frags` : player.ready ? 'ready' : 'waiting'}</span>
                 </li>
               ))}
             </ul>
