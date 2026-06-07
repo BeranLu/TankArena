@@ -89,6 +89,10 @@ const ANALYTICS_ATTR_NAME = appEnv.VITE_ANALYTICS_ATTR_NAME?.trim() ?? '';
 const ANALYTICS_ATTR_VALUE = appEnv.VITE_ANALYTICS_ATTR_VALUE?.trim() ?? '';
 const UI_SNAPSHOT_INTERVAL_MS = 100;
 const HAS_TOPBAR_ACTIONS = Boolean(HAS_SUPPORT_LINKS || FEEDBACK_URL || BUG_REPORT_URL);
+const JOYSTICK_MAX_OFFSET = 38;
+const JOYSTICK_DEADZONE = 0.25;
+
+type MobileControlMode = 'joystick' | 'buttons';
 
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
@@ -129,6 +133,8 @@ export default function App() {
   const [reportStatus, setReportStatus] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  const [joystickVisual, setJoystickVisual] = useState({ active: false, x: 0, y: 0 });
+  const [mobileControlMode, setMobileControlMode] = useState<MobileControlMode>('joystick');
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<GameSnapshot | null>(null);
@@ -139,6 +145,7 @@ export default function App() {
   const observerRef = useRef(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const joystickPointerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -504,6 +511,56 @@ export default function App() {
     }
     inputRef.current[key] = value;
     pushInput();
+  }
+
+  function setMovementFlags(next: Pick<PlayerInput, 'up' | 'down' | 'left' | 'right'>) {
+    const keys: Array<'up' | 'down' | 'left' | 'right'> = ['up', 'down', 'left', 'right'];
+    let changed = false;
+    for (const key of keys) {
+      if (inputRef.current[key] !== next[key]) {
+        inputRef.current[key] = next[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      pushInput();
+    }
+  }
+
+  function resetJoystickMovement() {
+    joystickPointerIdRef.current = null;
+    setJoystickVisual({ active: false, x: 0, y: 0 });
+    setMovementFlags({ up: false, down: false, left: false, right: false });
+  }
+
+  function updateJoystickFromPoint(clientX: number, clientY: number, element: HTMLDivElement) {
+    const rect = element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const rawX = clientX - centerX;
+    const rawY = clientY - centerY;
+    const distance = Math.hypot(rawX, rawY);
+    const cappedDistance = Math.min(distance, JOYSTICK_MAX_OFFSET);
+    const safeDistance = distance || 1;
+    const x = (rawX / safeDistance) * cappedDistance;
+    const y = (rawY / safeDistance) * cappedDistance;
+
+    setJoystickVisual({ active: true, x, y });
+
+    const nx = x / JOYSTICK_MAX_OFFSET;
+    const ny = y / JOYSTICK_MAX_OFFSET;
+    const magnitude = Math.hypot(nx, ny);
+    if (magnitude < JOYSTICK_DEADZONE) {
+      setMovementFlags({ up: false, down: false, left: false, right: false });
+      return;
+    }
+
+    setMovementFlags({
+      up: ny < -JOYSTICK_DEADZONE,
+      down: ny > JOYSTICK_DEADZONE,
+      left: nx < -JOYSTICK_DEADZONE,
+      right: nx > JOYSTICK_DEADZONE,
+    });
   }
 
   function updateAim(clientX: number, clientY: number) {
@@ -889,76 +946,135 @@ export default function App() {
 
           {isCoarsePointer && !observer ? (
             <div className="mobileControls" role="group" aria-label="Touch controls">
-              <button
-                type="button"
-                className="touchBtn"
-                aria-label="Move forward"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  setInputFlag('up', true);
-                }}
-                onPointerUp={() => setInputFlag('up', false)}
-                onPointerCancel={() => setInputFlag('up', false)}
-                onPointerLeave={() => setInputFlag('up', false)}
-              >
-                Up
-              </button>
-              <button
-                type="button"
-                className="touchBtn"
-                aria-label="Turn left"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  setInputFlag('left', true);
-                }}
-                onPointerUp={() => setInputFlag('left', false)}
-                onPointerCancel={() => setInputFlag('left', false)}
-                onPointerLeave={() => setInputFlag('left', false)}
-              >
-                Left
-              </button>
-              <button
-                type="button"
-                className="touchBtn"
-                aria-label="Turn right"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  setInputFlag('right', true);
-                }}
-                onPointerUp={() => setInputFlag('right', false)}
-                onPointerCancel={() => setInputFlag('right', false)}
-                onPointerLeave={() => setInputFlag('right', false)}
-              >
-                Right
-              </button>
-              <button
-                type="button"
-                className="touchBtn"
-                aria-label="Move backward"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  setInputFlag('down', true);
-                }}
-                onPointerUp={() => setInputFlag('down', false)}
-                onPointerCancel={() => setInputFlag('down', false)}
-                onPointerLeave={() => setInputFlag('down', false)}
-              >
-                Down
-              </button>
-              <button
-                type="button"
-                className="touchBtn touchBtnFire"
-                aria-label="Fire"
-                onPointerDown={(event) => {
-                  event.preventDefault();
-                  setInputFlag('fire', true);
-                }}
-                onPointerUp={() => setInputFlag('fire', false)}
-                onPointerCancel={() => setInputFlag('fire', false)}
-                onPointerLeave={() => setInputFlag('fire', false)}
-              >
-                Fire
-              </button>
+              <div className="mobileControlModeSwitch" role="group" aria-label="Movement control mode">
+                <button
+                  type="button"
+                  className={`modeBtn${mobileControlMode === 'joystick' ? ' active' : ''}`}
+                  onClick={() => {
+                    resetJoystickMovement();
+                    setMobileControlMode('joystick');
+                  }}
+                >
+                  Joystick
+                </button>
+                <button
+                  type="button"
+                  className={`modeBtn${mobileControlMode === 'buttons' ? ' active' : ''}`}
+                  onClick={() => {
+                    resetJoystickMovement();
+                    setMobileControlMode('buttons');
+                  }}
+                >
+                  Buttons
+                </button>
+              </div>
+
+              <div className="mobileMovementArea">
+                {mobileControlMode === 'joystick' ? (
+                  <div
+                    className="joystickPad"
+                    aria-label="Movement joystick"
+                    onPointerDown={(event) => {
+                      if (!joined || observer || joystickPointerIdRef.current !== null) {
+                        return;
+                      }
+                      event.preventDefault();
+                      joystickPointerIdRef.current = event.pointerId;
+                      (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+                      updateJoystickFromPoint(event.clientX, event.clientY, event.currentTarget as HTMLDivElement);
+                    }}
+                    onPointerMove={(event) => {
+                      if (event.pointerId !== joystickPointerIdRef.current) {
+                        return;
+                      }
+                      event.preventDefault();
+                      updateJoystickFromPoint(event.clientX, event.clientY, event.currentTarget as HTMLDivElement);
+                    }}
+                    onPointerUp={(event) => {
+                      if (event.pointerId !== joystickPointerIdRef.current) {
+                        return;
+                      }
+                      (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
+                      resetJoystickMovement();
+                    }}
+                    onPointerCancel={(event) => {
+                      if (event.pointerId !== joystickPointerIdRef.current) {
+                        return;
+                      }
+                      (event.currentTarget as HTMLDivElement).releasePointerCapture(event.pointerId);
+                      resetJoystickMovement();
+                    }}
+                  >
+                    <div
+                      className={`joystickKnob${joystickVisual.active ? ' active' : ''}`}
+                      style={{
+                        transform: `translate(calc(-50% + ${joystickVisual.x}px), calc(-50% + ${joystickVisual.y}px))`,
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="buttonPad" aria-label="Directional movement buttons">
+                    <button
+                      type="button"
+                      className="touchBtn moveBtnUp"
+                      aria-label="Move forward"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        setInputFlag('up', true);
+                      }}
+                      onPointerUp={() => setInputFlag('up', false)}
+                      onPointerCancel={() => setInputFlag('up', false)}
+                      onPointerLeave={() => setInputFlag('up', false)}
+                    >
+                      Up
+                    </button>
+                    <button
+                      type="button"
+                      className="touchBtn moveBtnLeft"
+                      aria-label="Turn left"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        setInputFlag('left', true);
+                      }}
+                      onPointerUp={() => setInputFlag('left', false)}
+                      onPointerCancel={() => setInputFlag('left', false)}
+                      onPointerLeave={() => setInputFlag('left', false)}
+                    >
+                      Left
+                    </button>
+                    <button
+                      type="button"
+                      className="touchBtn moveBtnRight"
+                      aria-label="Turn right"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        setInputFlag('right', true);
+                      }}
+                      onPointerUp={() => setInputFlag('right', false)}
+                      onPointerCancel={() => setInputFlag('right', false)}
+                      onPointerLeave={() => setInputFlag('right', false)}
+                    >
+                      Right
+                    </button>
+                    <button
+                      type="button"
+                      className="touchBtn moveBtnDown"
+                      aria-label="Move backward"
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        setInputFlag('down', true);
+                      }}
+                      onPointerUp={() => setInputFlag('down', false)}
+                      onPointerCancel={() => setInputFlag('down', false)}
+                      onPointerLeave={() => setInputFlag('down', false)}
+                    >
+                      Down
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <p className="mobileControlHint">Touch the arena to aim and fire.</p>
             </div>
           ) : null}
         </section>
