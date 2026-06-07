@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, ServerToClientEvents, TeamId } from '../shared/types';
+import type { ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
@@ -212,7 +212,7 @@ export default function App() {
       snapshotRef.current = nextSnapshot;
       latestSnapshotForUiRef.current = nextSnapshot;
 
-      const localPlayer = nextSnapshot.players.find((player) => player.id === nextSocket.id);
+      const localPlayer = nextSnapshot.players.find((player: PlayerSnapshot) => player.id === nextSocket.id);
       if (localPlayer) {
         setObserver(localPlayer.observer);
       }
