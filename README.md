@@ -138,9 +138,30 @@ After DNS points to the VM IP and certificates are valid, players can join over 
 - Empty non-main lobbies are auto-removed after `EMPTY_LOBBY_GRACE_MS`.
 - Recent disconnects can rejoin with preserved identity within `RECONNECT_GRACE_MS`.
 - Set `REDIS_URL` to enable the Socket.IO Redis adapter for multi-instance deployments.
-- Set `VITE_SUPPORT_URL` (for example your Buy Me a Coffee page) to show a "Support the project" section in the lobby preparation screen.
+- Configure donation links in `.env` to show a "Support the project" section in the lobby browser:
+	- `VITE_STRIPE_DONATE_URL` for your Stripe Payment Link
+	- `VITE_BUYMEACOFFEE_URL` for your Buy Me a Coffee page
+	- `VITE_SUPPORT_URL` is still supported as a backward-compatible alias for Buy Me a Coffee
 - Late joiners are added as observers while a match is running.
 - The current implementation is a playable foundation. Capture the flag and protect the king are wired as supported game modes and can be expanded next.
+
+## Donations
+
+If you already have Stripe and Buy Me a Coffee set up, add your links to `.env`:
+
+```env
+VITE_STRIPE_DONATE_URL=https://buy.stripe.com/your_payment_link
+VITE_BUYMEACOFFEE_URL=https://www.buymeacoffee.com/yourname
+```
+
+Then restart dev/build so Vite picks up env changes.
+
+Implementation details:
+
+- The donation panel appears on the lobby browser screen.
+- If both links are provided, both buttons are shown.
+- If only one link is provided, only that provider button is shown.
+- The links are client-side only and open in a new tab.
 
 ## License
 

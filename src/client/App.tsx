@@ -33,7 +33,16 @@ const DEFAULT_MODE_SETTINGS: ModeSettings = {
   controlPointsReinforcements: 300,
 };
 
-const SUPPORT_URL = (((import.meta as { env?: { VITE_SUPPORT_URL?: string } }).env?.VITE_SUPPORT_URL)?.trim() ?? '');
+type AppEnv = {
+  VITE_SUPPORT_URL?: string;
+  VITE_BUYMEACOFFEE_URL?: string;
+  VITE_STRIPE_DONATE_URL?: string;
+};
+
+const appEnv = ((import.meta as { env?: AppEnv }).env ?? {}) as AppEnv;
+const BUY_ME_A_COFFEE_URL = (appEnv.VITE_BUYMEACOFFEE_URL?.trim() ?? appEnv.VITE_SUPPORT_URL?.trim() ?? '');
+const STRIPE_DONATE_URL = appEnv.VITE_STRIPE_DONATE_URL?.trim() ?? '';
+const HAS_SUPPORT_LINKS = Boolean(BUY_ME_A_COFFEE_URL || STRIPE_DONATE_URL);
 const UI_SNAPSHOT_INTERVAL_MS = 100;
 
 function getOrCreateClientKey() {
@@ -423,13 +432,22 @@ export default function App() {
             <input type="password" value={newLobbyPassword} onChange={(event) => setNewLobbyPassword(event.target.value)} maxLength={48} placeholder="Leave empty for public lobby" />
           </label>
           <button type="button" onClick={createLobby} disabled={!newLobbyName.trim()}>Create lobby</button>
-          {SUPPORT_URL ? (
+          {HAS_SUPPORT_LINKS ? (
             <div className="supportBox">
               <p className="supportTitle">Support the project</p>
-              <p className="supportText">If you enjoy Tank Arena, you can support development on Buy Me a Coffee.</p>
-              <a className="supportLink" href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">
-                Buy Me a Coffee
-              </a>
+              <p className="supportText">If you enjoy Tank Arena, you can support development with either option below.</p>
+              <div className="supportActions">
+                {STRIPE_DONATE_URL ? (
+                  <a className="supportLink" href={STRIPE_DONATE_URL} target="_blank" rel="noopener noreferrer">
+                    Donate via Stripe
+                  </a>
+                ) : null}
+                {BUY_ME_A_COFFEE_URL ? (
+                  <a className="supportLink secondary" href={BUY_ME_A_COFFEE_URL} target="_blank" rel="noopener noreferrer">
+                    Buy Me a Coffee
+                  </a>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>

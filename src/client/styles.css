@@ -253,6 +253,12 @@ h1 {
   font-size: 0.92rem;
 }
 
+.supportActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .supportLink {
   display: inline-flex;
   align-items: center;
@@ -263,6 +269,11 @@ h1 {
   padding: 0.65rem 0.9rem;
   border-radius: 12px;
   text-decoration: none;
+}
+
+.supportLink.secondary {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.92), rgba(30, 41, 59, 0.95));
 }
 
 .supportLink:hover {
