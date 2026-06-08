@@ -148,6 +148,14 @@ export interface BandwidthReportErrorPayload {
   error: string;
 }
 
+export interface ServerAdminAuthPayload {
+  accessCode: string;
+}
+
+export interface ServerAdminAuthorizedPayload {
+  authorized: boolean;
+}
+
 export interface StateFastSnapshot {
   net?: NetFrameMeta;
   phase: MatchPhase;
@@ -205,6 +213,7 @@ export interface ClientToServerEvents {
   input: (input: PlayerInput) => void;
   netAck: (payload: NetAckPayload) => void;
   requestKeyframe: (payload: NetResyncRequestPayload) => void;
+  authorizeServerAdmin: (payload: ServerAdminAuthPayload) => void;
   requestBandwidthReport: () => void;
 }
 
@@ -216,6 +225,8 @@ export interface ServerToClientEvents {
   lobbyList: (lobbies: LobbySummary[]) => void;
   message: (text: string) => void;
   kicked: (payload: { reason: string }) => void;
+  serverAdminAuthorized: (payload: ServerAdminAuthorizedPayload) => void;
+  serverAdminAuthorizationError: (payload: BandwidthReportErrorPayload) => void;
   bandwidthReport: (payload: BandwidthReportPayload) => void;
   bandwidthReportError: (payload: BandwidthReportErrorPayload) => void;
 }

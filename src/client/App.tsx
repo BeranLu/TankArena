@@ -79,6 +79,45 @@ type UserReportPayload = {
   scoreboard: { red: number; blue: number } | null;
 };
 
+type BandwidthReportWindow = {
+  generatedAt: string;
+  windowMs: number;
+  lobbyId: string;
+  lobbyName: string;
+  mode: GameMode;
+  phase: string;
+  activePlayers: number;
+  connectedClients: number;
+  lobbyCount: number;
+  totalBytes: number;
+  totalEvents: number;
+  bytesPerMinute: number;
+  averageBytesPerEvent: number;
+  topEvents: Array<{ eventName: string; events: number; bytes: number }>;
+  snapshotPayload?: {
+    samples: number;
+    averageBytes: number;
+    p95Bytes: number;
+    maxBytes: number;
+  };
+  projectedBytesPerMinuteAtMultiplier: number | null;
+};
+
+type BandwidthReportSummary = {
+  totalWindows: number;
+  totalBytes: number;
+  totalEvents: number;
+  averageBytesPerMinute: number;
+  p95BytesPerMinute: number;
+  maxBytesPerMinute: number;
+  averageActivePlayers: number | null;
+  peakActivePlayers: number | null;
+  averageConnectedClients: number | null;
+  peakConnectedClients: number | null;
+  latestWindow: BandwidthReportWindow | null;
+  topEvents: Array<{ eventName: string; events: number; bytes: number }>;
+};
+
 const appEnv = ((import.meta as { env?: AppEnv }).env ?? {}) as AppEnv;
 const BUY_ME_A_COFFEE_URL = (appEnv.VITE_BUYMEACOFFEE_URL?.trim() ?? appEnv.VITE_SUPPORT_URL?.trim() ?? '');
 const STRIPE_DONATE_URL = appEnv.VITE_STRIPE_DONATE_URL?.trim() ?? '';
@@ -90,7 +129,7 @@ const ANALYTICS_SCRIPT_URL = appEnv.VITE_ANALYTICS_SCRIPT_URL?.trim() ?? '';
 const ANALYTICS_ATTR_NAME = appEnv.VITE_ANALYTICS_ATTR_NAME?.trim() ?? '';
 const ANALYTICS_ATTR_VALUE = appEnv.VITE_ANALYTICS_ATTR_VALUE?.trim() ?? '';
 const UI_SNAPSHOT_INTERVAL_MS = 100;
-const HAS_TOPBAR_ACTIONS = Boolean(HAS_SUPPORT_LINKS || FEEDBACK_URL || BUG_REPORT_URL);
+const HAS_TOPBAR_ACTIONS = true;
 const JOYSTICK_MAX_OFFSET = 38;
 const JOYSTICK_DEADZONE = 0.25;
 const AIM_JOYSTICK_MAX_OFFSET = 38;
@@ -121,6 +160,117 @@ function mergeEntitiesById<T extends { id: string }>(
 function pathLeaf(value: string) {
   const parts = value.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? value;
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value)) {
+    return '0 B';
+  }
+  const absValue = Math.abs(value);
+  if (absValue < 1024) {
+    return `${Math.round(value)} B`;
+  }
+  if (absValue < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function parseBandwidthReport(content: string) {
+  const windows: BandwidthReportWindow[] = [];
+
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      windows.push(normalizeBandwidthReportWindow(JSON.parse(trimmed) as Partial<BandwidthReportWindow>));
+    } catch {
+      continue;
+    }
+  }
+
+  return windows;
+}
+
+function normalizeBandwidthReportWindow(value: Partial<BandwidthReportWindow> & { generatedAt?: string }): BandwidthReportWindow {
+  return {
+    generatedAt: (value.generatedAt ?? new Date().toISOString()).toString(),
+    windowMs: Number.isFinite(value.windowMs) ? Number(value.windowMs) : 0,
+    lobbyId: (value.lobbyId ?? 'unknown').toString(),
+    lobbyName: (value.lobbyName ?? 'unknown').toString(),
+    mode: value.mode ?? 'deathmatch',
+    phase: (value.phase ?? 'unknown').toString(),
+    activePlayers: Number.isFinite(value.activePlayers) ? Number(value.activePlayers) : 0,
+    connectedClients: Number.isFinite(value.connectedClients) ? Number(value.connectedClients) : 0,
+    lobbyCount: Number.isFinite(value.lobbyCount) ? Number(value.lobbyCount) : 0,
+    totalBytes: Number.isFinite(value.totalBytes) ? Number(value.totalBytes) : 0,
+    totalEvents: Number.isFinite(value.totalEvents) ? Number(value.totalEvents) : 0,
+    bytesPerMinute: Number.isFinite(value.bytesPerMinute) ? Number(value.bytesPerMinute) : 0,
+    averageBytesPerEvent: Number.isFinite(value.averageBytesPerEvent) ? Number(value.averageBytesPerEvent) : 0,
+    topEvents: Array.isArray(value.topEvents)
+      ? value.topEvents.map((event) => ({
+          eventName: (event?.eventName ?? 'unknown').toString(),
+          events: Number.isFinite(event?.events) ? Number(event.events) : 0,
+          bytes: Number.isFinite(event?.bytes) ? Number(event.bytes) : 0,
+        }))
+      : [],
+    snapshotPayload: value.snapshotPayload && Number.isFinite(value.snapshotPayload.samples)
+      ? {
+          samples: Number(value.snapshotPayload.samples),
+          averageBytes: Number.isFinite(value.snapshotPayload.averageBytes) ? Number(value.snapshotPayload.averageBytes) : 0,
+          p95Bytes: Number.isFinite(value.snapshotPayload.p95Bytes) ? Number(value.snapshotPayload.p95Bytes) : 0,
+          maxBytes: Number.isFinite(value.snapshotPayload.maxBytes) ? Number(value.snapshotPayload.maxBytes) : 0,
+        }
+      : undefined,
+    projectedBytesPerMinuteAtMultiplier: Number.isFinite(value.projectedBytesPerMinuteAtMultiplier)
+      ? Number(value.projectedBytesPerMinuteAtMultiplier)
+      : null,
+  };
+}
+
+function summarizeBandwidthReport(windows: BandwidthReportWindow[]): BandwidthReportSummary {
+  const totalWindows = windows.length;
+  const totalBytes = windows.reduce((sum, window) => sum + window.totalBytes, 0);
+  const totalEvents = windows.reduce((sum, window) => sum + window.totalEvents, 0);
+  const totalWindowMs = windows.reduce((sum, window) => sum + window.windowMs, 0);
+  const bytesPerMinuteValues = windows.map((window) => window.bytesPerMinute).sort((left, right) => left - right);
+  const p95Index = Math.max(0, Math.ceil(bytesPerMinuteValues.length * 0.95) - 1);
+  const topEventsMap = new Map<string, { eventName: string; events: number; bytes: number }>();
+
+  for (const window of windows) {
+    for (const event of window.topEvents) {
+      const current = topEventsMap.get(event.eventName) ?? { eventName: event.eventName, events: 0, bytes: 0 };
+      current.events += event.events;
+      current.bytes += event.bytes;
+      topEventsMap.set(event.eventName, current);
+    }
+  }
+
+  const averageActivePlayers = totalWindows > 0
+    ? windows.reduce((sum, window) => sum + window.activePlayers, 0) / totalWindows
+    : null;
+  const peakActivePlayers = totalWindows > 0 ? Math.max(...windows.map((window) => window.activePlayers)) : null;
+  const averageConnectedClients = totalWindows > 0
+    ? windows.reduce((sum, window) => sum + window.connectedClients, 0) / totalWindows
+    : null;
+  const peakConnectedClients = totalWindows > 0 ? Math.max(...windows.map((window) => window.connectedClients)) : null;
+
+  return {
+    totalWindows,
+    totalBytes,
+    totalEvents,
+    averageBytesPerMinute: totalWindowMs > 0 ? totalBytes * (60000 / totalWindowMs) : 0,
+    p95BytesPerMinute: bytesPerMinuteValues[p95Index] ?? 0,
+    maxBytesPerMinute: bytesPerMinuteValues[bytesPerMinuteValues.length - 1] ?? 0,
+    averageActivePlayers,
+    peakActivePlayers,
+    averageConnectedClients,
+    peakConnectedClients,
+    latestWindow: windows[windows.length - 1] ?? null,
+    topEvents: Array.from(topEventsMap.values()).sort((left, right) => right.bytes - left.bytes).slice(0, 8),
+  };
 }
 
 function getOrCreateClientKey() {
@@ -167,6 +317,9 @@ export default function App() {
   const [bandwidthReportContent, setBandwidthReportContent] = useState('');
   const [bandwidthReportPath, setBandwidthReportPath] = useState('');
   const [bandwidthReportTruncated, setBandwidthReportTruncated] = useState(false);
+  const [serverAdminAccessCode, setServerAdminAccessCode] = useState('');
+  const [serverAdminAuthorized, setServerAdminAuthorized] = useState(false);
+  const [serverAdminAuthStatus, setServerAdminAuthStatus] = useState('');
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const [joystickVisual, setJoystickVisual] = useState({ active: false, x: 0, y: 0 });
   const [aimJoystickVisual, setAimJoystickVisual] = useState({ active: false, x: 0, y: 0 });
@@ -194,6 +347,8 @@ export default function App() {
   const aimJoystickPointerIdRef = useRef<number | null>(null);
   const arenaMovePointerIdRef = useRef<number | null>(null);
   const arenaAimPointerIdRef = useRef<number | null>(null);
+
+  const bandwidthReportSummary = useMemo(() => summarizeBandwidthReport(parseBandwidthReport(bandwidthReportContent)), [bandwidthReportContent]);
 
   const isArenaStickMode = isCoarsePointer && mobileControlMode === 'arena-sticks';
 
@@ -283,6 +438,9 @@ export default function App() {
       setBandwidthReportContent('');
       setBandwidthReportPath('');
       setBandwidthReportTruncated(false);
+      setServerAdminAccessCode('');
+      setServerAdminAuthorized(false);
+      setServerAdminAuthStatus('');
       latestSnapshotForUiRef.current = null;
       setSnapshot(null);
       nextSocket.emit('listLobbies');
@@ -479,6 +637,20 @@ export default function App() {
     nextSocket.on('message', (text) => setAnnouncement(text));
     nextSocket.on('kicked', () => {
       resetToLobbyBrowser();
+    });
+
+    nextSocket.on('serverAdminAuthorized', () => {
+      setServerAdminAuthorized(true);
+      setServerAdminAuthStatus('Server admin unlocked.');
+      setBandwidthReportLoading(true);
+      setBandwidthReportStatus('Loading bandwidth report...');
+      nextSocket.emit('requestBandwidthReport');
+    });
+
+    nextSocket.on('serverAdminAuthorizationError', (payload: BandwidthReportErrorPayload) => {
+      setBandwidthReportLoading(false);
+      setServerAdminAuthStatus(payload.error);
+      setBandwidthReportOpen(true);
     });
 
     nextSocket.on('bandwidthReport', (payload: BandwidthReportPayload) => {
@@ -700,6 +872,9 @@ export default function App() {
     setBandwidthReportContent('');
     setBandwidthReportPath('');
     setBandwidthReportTruncated(false);
+    setServerAdminAccessCode('');
+    setServerAdminAuthorized(false);
+    setServerAdminAuthStatus('');
     setSnapshot(null);
     socket?.emit('listLobbies');
   };
@@ -708,6 +883,14 @@ export default function App() {
   const togglePause = () => socket?.emit('togglePause');
   const resetLobby = () => socket?.emit('resetLobby');
   const applyModeSettings = () => socket?.emit('setModeSettings', adminSettings);
+  const authorizeServerAdmin = () => {
+    if (!socket || !serverAdminAccessCode.trim()) {
+      setServerAdminAuthStatus('Enter the server admin access code.');
+      return;
+    }
+    setServerAdminAuthStatus('Verifying server admin code...');
+    socket.emit('authorizeServerAdmin', { accessCode: serverAdminAccessCode.trim() });
+  };
   const requestBandwidthReport = () => {
     if (!socket) {
       return;
@@ -730,6 +913,11 @@ export default function App() {
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
+  };
+
+  const openServerAdminPanel = () => {
+    setBandwidthReportOpen(true);
+    setBandwidthReportStatus(serverAdminAuthorized ? 'Server admin unlocked.' : 'Enter the server admin access code to unlock the report viewer.');
   };
 
   const activeTargetLabel = isDeathmatch
@@ -1168,6 +1356,17 @@ export default function App() {
                 </svg>
               </button>
             ) : null}
+            <button
+              type="button"
+              className="supportIconLink admin"
+              onClick={openServerAdminPanel}
+              aria-label="Open server admin"
+              title="Open server admin"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 2.2 4 5.3v5.3c0 5.4 3.5 9.7 8 11.2 4.5-1.5 8-5.8 8-11.2V5.3L12 2.2Zm0 4.1c1.9 0 3.5 1.6 3.5 3.5v1.2H8.5V9.8c0-1.9 1.6-3.5 3.5-3.5Zm0 13.2c-2.9-1.1-5-3.8-5.5-7h11c-.5 3.2-2.6 5.9-5.5 7Z" />
+              </svg>
+            </button>
           </div>
         ) : null}
       </header>
@@ -1218,6 +1417,113 @@ export default function App() {
               <button type="button" className="quietButton" onClick={() => setReportOpen(false)}>Close</button>
             </div>
             {reportStatus ? <p className="reportStatus">{reportStatus}</p> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {bandwidthReportOpen ? (
+        <div className="reportModalBackdrop" role="presentation" onClick={() => setBandwidthReportOpen(false)}>
+          <div className="reportModalCard serverAdminCard" role="dialog" aria-modal="true" aria-label="Server admin" onClick={(event) => event.stopPropagation()}>
+            <h2>Server admin</h2>
+            <p className="reportIntro">Separate from lobby admin. Use this to inspect bandwidth history and later server-wide player statistics.</p>
+
+            {!serverAdminAuthorized ? (
+              <>
+                <label className="field">
+                  <span>Server admin access code</span>
+                  <input
+                    type="password"
+                    value={serverAdminAccessCode}
+                    onChange={(event) => setServerAdminAccessCode(event.target.value)}
+                    placeholder="Enter the Render secret"
+                    autoComplete="current-password"
+                  />
+                </label>
+                <div className="reportActions">
+                  <button type="button" onClick={authorizeServerAdmin} disabled={!serverAdminAccessCode.trim()}>Unlock viewer</button>
+                  <button type="button" className="quietButton" onClick={() => setBandwidthReportOpen(false)}>Close</button>
+                </div>
+                {serverAdminAuthStatus ? <p className="reportStatus">{serverAdminAuthStatus}</p> : null}
+              </>
+            ) : (
+              <>
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={requestBandwidthReport} disabled={bandwidthReportLoading}>Load report</button>
+                  <button type="button" onClick={downloadBandwidthReport} disabled={!bandwidthReportContent}>Download JSONL</button>
+                  <button type="button" className="quietButton" onClick={() => setBandwidthReportOpen(false)}>Close</button>
+                </div>
+                <p className="adminTip">
+                  {bandwidthReportPath
+                    ? `${bandwidthReportPath}${bandwidthReportTruncated ? ' (latest window tail)' : ''}`
+                    : 'Loads the latest bandwidth JSONL report from the server.'}
+                </p>
+                {bandwidthReportStatus ? <p className="reportStatus">{bandwidthReportStatus}</p> : null}
+
+                <section className="bandwidthSummarySection">
+                  <div className="statsGrid bandwidthSummaryGrid">
+                    <div><span>Windows</span><strong>{bandwidthReportSummary.totalWindows}</strong></div>
+                    <div><span>Avg bytes/min</span><strong>{formatBytes(bandwidthReportSummary.averageBytesPerMinute)}</strong></div>
+                    <div><span>P95 bytes/min</span><strong>{formatBytes(bandwidthReportSummary.p95BytesPerMinute)}</strong></div>
+                    <div><span>Peak bytes/min</span><strong>{formatBytes(bandwidthReportSummary.maxBytesPerMinute)}</strong></div>
+                    <div><span>Peak active players</span><strong>{bandwidthReportSummary.peakActivePlayers ?? 0}</strong></div>
+                    <div><span>Peak connected clients</span><strong>{bandwidthReportSummary.peakConnectedClients ?? 0}</strong></div>
+                  </div>
+
+                  <div className="statsGrid bandwidthSummaryGrid">
+                    <div><span>Average active players</span><strong>{bandwidthReportSummary.averageActivePlayers != null ? bandwidthReportSummary.averageActivePlayers.toFixed(1) : '0.0'}</strong></div>
+                    <div><span>Average connected clients</span><strong>{bandwidthReportSummary.averageConnectedClients != null ? bandwidthReportSummary.averageConnectedClients.toFixed(1) : '0.0'}</strong></div>
+                    <div><span>Total bytes</span><strong>{formatBytes(bandwidthReportSummary.totalBytes)}</strong></div>
+                    <div><span>Total events</span><strong>{bandwidthReportSummary.totalEvents.toLocaleString()}</strong></div>
+                    <div><span>Latest lobby</span><strong>{bandwidthReportSummary.latestWindow ? bandwidthReportSummary.latestWindow.lobbyName : 'n/a'}</strong></div>
+                    <div><span>Latest phase</span><strong>{bandwidthReportSummary.latestWindow ? bandwidthReportSummary.latestWindow.phase : 'n/a'}</strong></div>
+                  </div>
+
+                  {bandwidthReportSummary.latestWindow ? (
+                    <div className="hintRow">
+                      <span>Latest window: {new Date(bandwidthReportSummary.latestWindow.generatedAt).toLocaleString()}</span>
+                      <span>Projected bytes/min: {bandwidthReportSummary.latestWindow.projectedBytesPerMinuteAtMultiplier != null ? formatBytes(bandwidthReportSummary.latestWindow.projectedBytesPerMinuteAtMultiplier) : 'n/a'}</span>
+                    </div>
+                  ) : null}
+
+                  <div className="stack">
+                    <h3>Top events</h3>
+                    <table className="bandwidthSummaryTable">
+                      <thead>
+                        <tr>
+                          <th>Event</th>
+                          <th>Bytes</th>
+                          <th>Events</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bandwidthReportSummary.topEvents.length > 0 ? bandwidthReportSummary.topEvents.map((event) => (
+                          <tr key={event.eventName}>
+                            <td>{event.eventName}</td>
+                            <td>{formatBytes(event.bytes)}</td>
+                            <td>{event.events.toLocaleString()}</td>
+                          </tr>
+                        )) : (
+                          <tr><td colSpan={3}>No bandwidth report loaded yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {bandwidthReportContent ? (
+                    <details className="bandwidthRawDetails">
+                      <summary>Raw JSONL</summary>
+                      <textarea
+                        readOnly
+                        value={bandwidthReportContent}
+                        className="bandwidthReportViewer"
+                        rows={12}
+                        spellCheck={false}
+                      />
+                    </details>
+                  ) : null}
+                </section>
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -1859,31 +2165,6 @@ export default function App() {
                   <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!adminTargetPlayerId}>Pass admin</button>
                   <button type="button" onClick={() => socket?.emit('kickPlayer', { playerId: kickTargetPlayerId })} disabled={!kickTargetPlayerId}>Kick player</button>
                 </div>
-              </div>
-            </details>
-
-            <details className="adminAccordion">
-              <summary>Bandwidth report</summary>
-              <div className="adminAccordionBody">
-                <div className="controlsRow wrap">
-                  <button type="button" onClick={requestBandwidthReport} disabled={bandwidthReportLoading}>Load report</button>
-                  <button type="button" onClick={downloadBandwidthReport} disabled={!bandwidthReportContent}>Download JSONL</button>
-                </div>
-                <p className="adminTip">
-                  {bandwidthReportPath
-                    ? `${bandwidthReportPath}${bandwidthReportTruncated ? ' (latest window tail)' : ''}`
-                    : 'Loads the latest bandwidth JSONL report from the server.'}
-                </p>
-                {bandwidthReportStatus ? <p className="reportStatus">{bandwidthReportStatus}</p> : null}
-                {bandwidthReportContent ? (
-                  <textarea
-                    readOnly
-                    value={bandwidthReportContent}
-                    className="bandwidthReportViewer"
-                    rows={12}
-                    spellCheck={false}
-                  />
-                ) : null}
               </div>
             </details>
 

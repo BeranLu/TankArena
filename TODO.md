@@ -117,7 +117,8 @@ Goal: reduce outbound WebSocket traffic while preserving gameplay feel in active
 
 - [x] (S) Add per-event outbound WS metrics logs (bytes and event counts).
 - [x] (S) Add automatic WS JSONL report sink for baseline capture and forecasting.
-- [x] (S) Add admin console access to the bandwidth report from the browser.
+ - [x] (S) Add server-admin access to the bandwidth report from the browser.
+ - [x] (S) Add an HTML summary viewer for bandwidth history and future server statistics.
 - [ ] (S) Record 24h baseline after deploy:
   - [ ] Capture total outbound WS KB per minute.
   - [ ] Capture top events by bytes (`snapshot`, `message`, `lobbyList`, `joined`).

@@ -24,6 +24,8 @@ import type {
   NetResyncRequestPayload,
   BandwidthReportErrorPayload,
   BandwidthReportPayload,
+  ServerAdminAuthPayload,
+  ServerAdminAuthorizedPayload,
   PlayerInput,
   PlayerSnapshot,
   ProjectileSnapshot,
@@ -125,6 +127,7 @@ const WS_REPORT_ENABLED = (process.env.WS_REPORT_ENABLED ?? '1') !== '0';
 const WS_REPORT_PATH = (process.env.WS_REPORT_PATH ?? 'reports/bandwidth-report.jsonl').trim();
 const WS_REPORT_PROJECTED_PLAYER_MULTIPLIER = Math.max(1, parseLimit(process.env.WS_REPORT_PROJECTED_PLAYER_MULTIPLIER, 2));
 const WS_REPORT_MAX_BYTES = Math.max(1024, parseLimit(process.env.WS_REPORT_MAX_BYTES, 250000));
+const SERVER_ADMIN_ACCESS_CODE = (process.env.SERVER_ADMIN_ACCESS_CODE ?? '').trim();
 const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
 const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
 const SNAPSHOT_QUANTIZE_ENABLED = (process.env.SNAPSHOT_QUANTIZE_ENABLED ?? '1') !== '0';
@@ -171,6 +174,13 @@ type WsMetricTotals = {
 type WsReportWindow = {
   generatedAt: string;
   windowMs: number;
+  lobbyId: string;
+  lobbyName: string;
+  mode: GameMode;
+  phase: MatchPhase;
+  activePlayers: number;
+  connectedClients: number;
+  lobbyCount: number;
   totalBytes: number;
   totalEvents: number;
   bytesPerMinute: number;
@@ -349,6 +359,7 @@ const wsOutboundMetrics = new Map<string, WsMetricTotals>();
 const snapshotPayloadStats: SnapshotPayloadStats = { samples: 0, totalBytes: 0, maxBytes: 0, sampleBytes: [] };
 let wsMetricsWindowStartedAt = Date.now();
 let wsReportFileReady = false;
+const serverAdminSockets = new Set<string>();
 let lobbyCounter = 1;
 let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null);
 
@@ -461,6 +472,13 @@ function writeWsReportWindow(
   const report: WsReportWindow = {
     generatedAt: new Date(now).toISOString(),
     windowMs,
+    lobbyId: state.id,
+    lobbyName: state.name,
+    mode: state.mode,
+    phase: state.phase,
+    activePlayers: Array.from(state.players.values()).filter((player) => !player.observer).length,
+    connectedClients: Array.from(state.players.values()).filter((player) => !player.isBot).length,
+    lobbyCount: lobbyRuntimes.size,
     totalBytes,
     totalEvents,
     bytesPerMinute: totalBytes * (60000 / windowMs),
@@ -520,6 +538,10 @@ function readBandwidthReportTail(maxBytes: number) {
     content: raw.slice(raw.length - maxBytes),
     truncated: true,
   };
+}
+
+function isServerAdmin(socketId: string) {
+  return serverAdminSockets.has(socketId);
 }
 
 function emitToLobby<E extends ServerEventName>(lobbyId: string, eventName: E, ...args: Parameters<ServerToClientEvents[E]>) {
@@ -859,40 +881,48 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('requestBandwidthReport', () => {
-    const runtime = getSocketLobby(socket.id);
-    if (!runtime) {
-      emitDirect(socket, 'bandwidthReportError', { error: 'Join a lobby first to access reports.' });
+  socket.on('authorizeServerAdmin', ({ accessCode }: ServerAdminAuthPayload) => {
+    if (!SERVER_ADMIN_ACCESS_CODE) {
+      emitDirect(socket, 'serverAdminAuthorizationError', { error: 'Server admin access is not configured on the server.' });
       return;
     }
 
-    runInLobby(runtime, () => {
-      if (!isAdmin(socket.id)) {
-        emitDirect(socket, 'bandwidthReportError', { error: 'Only the lobby admin can access bandwidth reports.' });
-        return;
-      }
+    if ((accessCode ?? '').trim() !== SERVER_ADMIN_ACCESS_CODE) {
+      emitDirect(socket, 'serverAdminAuthorizationError', { error: 'Server admin code is incorrect.' });
+      return;
+    }
 
-      if (!WS_REPORT_ENABLED) {
-        emitDirect(socket, 'bandwidthReportError', { error: 'Bandwidth reporting is disabled on the server.' });
-        return;
-      }
+    serverAdminSockets.add(socket.id);
+    emitDirect(socket, 'serverAdminAuthorized', { authorized: true } satisfies ServerAdminAuthorizedPayload);
+  });
 
-      try {
-        const report = readBandwidthReportTail(WS_REPORT_MAX_BYTES);
-        emitDirect(socket, 'bandwidthReport', {
-          path: WS_REPORT_PATH,
-          content: report.content,
-          truncated: report.truncated,
-          generatedAt: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error('Failed to read bandwidth report:', error);
-        emitDirect(socket, 'bandwidthReportError', { error: 'Unable to read the bandwidth report file on the server.' });
-      }
-    });
+  socket.on('requestBandwidthReport', () => {
+    if (!isServerAdmin(socket.id)) {
+      emitDirect(socket, 'bandwidthReportError', { error: 'Server admin authorization is required.' });
+      return;
+    }
+
+    if (!WS_REPORT_ENABLED) {
+      emitDirect(socket, 'bandwidthReportError', { error: 'Bandwidth reporting is disabled on the server.' });
+      return;
+    }
+
+    try {
+      const report = readBandwidthReportTail(WS_REPORT_MAX_BYTES);
+      emitDirect(socket, 'bandwidthReport', {
+        path: WS_REPORT_PATH,
+        content: report.content,
+        truncated: report.truncated,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('Failed to read bandwidth report:', error);
+      emitDirect(socket, 'bandwidthReportError', { error: 'Unable to read the bandwidth report file on the server.' });
+    }
   });
 
   socket.on('disconnect', () => {
+    serverAdminSockets.delete(socket.id);
     leaveLobby(socket.id, '', true);
   });
 });

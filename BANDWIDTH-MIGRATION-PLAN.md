@@ -167,7 +167,7 @@ Promotion gate for each phase:
 
 - Add this plan into sprint board with owners per phase.
 - Implement protocol capability handshake scaffold.
-- Start Phase 0 baseline capture and lock target thresholds using the automatic WS report sink.
+- Start Phase 0 baseline capture and lock target thresholds using the automatic WS report sink and server-admin summary viewer.
 
 ## Next 3 Execution Tasks
 
@@ -178,6 +178,7 @@ Promotion gate for each phase:
 2. Baseline evidence pack (Next)
 - Capture 24h WS baseline report with bytes/min, avg payload, p95 payload, top events by bytes.
 - Use the automatic JSONL report sink at `reports/bandwidth-report.jsonl`.
+- Review it through the server-admin HTML summary viewer.
 - Publish thresholds for production promote gate.
 
 3. Interpolation smoothing pass (Next)
