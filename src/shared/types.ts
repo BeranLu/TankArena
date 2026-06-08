@@ -137,6 +137,17 @@ export interface NetResyncRequestPayload {
   reason?: string;
 }
 
+export interface BandwidthReportPayload {
+  path: string;
+  content: string;
+  truncated: boolean;
+  generatedAt: string;
+}
+
+export interface BandwidthReportErrorPayload {
+  error: string;
+}
+
 export interface StateFastSnapshot {
   net?: NetFrameMeta;
   phase: MatchPhase;
@@ -194,6 +205,7 @@ export interface ClientToServerEvents {
   input: (input: PlayerInput) => void;
   netAck: (payload: NetAckPayload) => void;
   requestKeyframe: (payload: NetResyncRequestPayload) => void;
+  requestBandwidthReport: () => void;
 }
 
 export interface ServerToClientEvents {
@@ -204,4 +216,6 @@ export interface ServerToClientEvents {
   lobbyList: (lobbies: LobbySummary[]) => void;
   message: (text: string) => void;
   kicked: (payload: { reason: string }) => void;
+  bandwidthReport: (payload: BandwidthReportPayload) => void;
+  bandwidthReportError: (payload: BandwidthReportErrorPayload) => void;
 }

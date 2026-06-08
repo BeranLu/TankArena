@@ -22,6 +22,8 @@ import type {
   NetChannel,
   NetFrameMeta,
   NetResyncRequestPayload,
+  BandwidthReportErrorPayload,
+  BandwidthReportPayload,
   PlayerInput,
   PlayerSnapshot,
   ProjectileSnapshot,
@@ -122,6 +124,7 @@ const NET_KEYFRAME_INTERVAL_MS = Math.max(500, parseLimit(process.env.NET_KEYFRA
 const WS_REPORT_ENABLED = (process.env.WS_REPORT_ENABLED ?? '1') !== '0';
 const WS_REPORT_PATH = (process.env.WS_REPORT_PATH ?? 'reports/bandwidth-report.jsonl').trim();
 const WS_REPORT_PROJECTED_PLAYER_MULTIPLIER = Math.max(1, parseLimit(process.env.WS_REPORT_PROJECTED_PLAYER_MULTIPLIER, 2));
+const WS_REPORT_MAX_BYTES = Math.max(1024, parseLimit(process.env.WS_REPORT_MAX_BYTES, 250000));
 const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
 const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
 const SNAPSHOT_QUANTIZE_ENABLED = (process.env.SNAPSHOT_QUANTIZE_ENABLED ?? '1') !== '0';
@@ -503,6 +506,22 @@ function ensureWsReportDirectory() {
   wsReportFileReady = true;
 }
 
+function readBandwidthReportTail(maxBytes: number) {
+  if (!fs.existsSync(WS_REPORT_PATH)) {
+    return { content: '', truncated: false };
+  }
+
+  const raw = fs.readFileSync(WS_REPORT_PATH, 'utf8');
+  if (raw.length <= maxBytes) {
+    return { content: raw, truncated: false };
+  }
+
+  return {
+    content: raw.slice(raw.length - maxBytes),
+    truncated: true,
+  };
+}
+
 function emitToLobby<E extends ServerEventName>(lobbyId: string, eventName: E, ...args: Parameters<ServerToClientEvents[E]>) {
   const roomId = lobbyRoom(lobbyId);
   const recipients = io.sockets.adapter.rooms.get(roomId)?.size ?? 0;
@@ -837,6 +856,39 @@ io.on('connection', (socket) => {
     }
     runInLobby(runtime, () => {
       emitSnapshot({ force: true, includeMap: true, targetSocketId: socket.id });
+    });
+  });
+
+  socket.on('requestBandwidthReport', () => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
+      emitDirect(socket, 'bandwidthReportError', { error: 'Join a lobby first to access reports.' });
+      return;
+    }
+
+    runInLobby(runtime, () => {
+      if (!isAdmin(socket.id)) {
+        emitDirect(socket, 'bandwidthReportError', { error: 'Only the lobby admin can access bandwidth reports.' });
+        return;
+      }
+
+      if (!WS_REPORT_ENABLED) {
+        emitDirect(socket, 'bandwidthReportError', { error: 'Bandwidth reporting is disabled on the server.' });
+        return;
+      }
+
+      try {
+        const report = readBandwidthReportTail(WS_REPORT_MAX_BYTES);
+        emitDirect(socket, 'bandwidthReport', {
+          path: WS_REPORT_PATH,
+          content: report.content,
+          truncated: report.truncated,
+          generatedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error('Failed to read bandwidth report:', error);
+        emitDirect(socket, 'bandwidthReportError', { error: 'Unable to read the bandwidth report file on the server.' });
+      }
     });
   });
 

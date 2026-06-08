@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ArenaMap, ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, StateFastSnapshot, StateSlowSnapshot, TeamId } from '../shared/types';
+import type { ArenaMap, BandwidthReportErrorPayload, BandwidthReportPayload, ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, StateFastSnapshot, StateSlowSnapshot, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
@@ -118,6 +118,11 @@ function mergeEntitiesById<T extends { id: string }>(
   return Array.from(byId.values());
 }
 
+function pathLeaf(value: string) {
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? value;
+}
+
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
   const existing = window.localStorage.getItem(storageKey)?.trim();
@@ -156,6 +161,12 @@ export default function App() {
   const [reportSeverity, setReportSeverity] = useState<UserReportSeverity>('medium');
   const [reportStatus, setReportStatus] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [bandwidthReportOpen, setBandwidthReportOpen] = useState(false);
+  const [bandwidthReportStatus, setBandwidthReportStatus] = useState('');
+  const [bandwidthReportLoading, setBandwidthReportLoading] = useState(false);
+  const [bandwidthReportContent, setBandwidthReportContent] = useState('');
+  const [bandwidthReportPath, setBandwidthReportPath] = useState('');
+  const [bandwidthReportTruncated, setBandwidthReportTruncated] = useState(false);
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const [joystickVisual, setJoystickVisual] = useState({ active: false, x: 0, y: 0 });
   const [aimJoystickVisual, setAimJoystickVisual] = useState({ active: false, x: 0, y: 0 });
@@ -266,6 +277,12 @@ export default function App() {
       slowStateRef.current = null;
       lastFastSequenceRef.current = 0;
       lastSlowSequenceRef.current = 0;
+      setBandwidthReportOpen(false);
+      setBandwidthReportLoading(false);
+      setBandwidthReportStatus('');
+      setBandwidthReportContent('');
+      setBandwidthReportPath('');
+      setBandwidthReportTruncated(false);
       latestSnapshotForUiRef.current = null;
       setSnapshot(null);
       nextSocket.emit('listLobbies');
@@ -462,6 +479,21 @@ export default function App() {
     nextSocket.on('message', (text) => setAnnouncement(text));
     nextSocket.on('kicked', () => {
       resetToLobbyBrowser();
+    });
+
+    nextSocket.on('bandwidthReport', (payload: BandwidthReportPayload) => {
+      setBandwidthReportOpen(true);
+      setBandwidthReportLoading(false);
+      setBandwidthReportStatus(payload.truncated ? 'Report truncated to the latest window.' : 'Report loaded successfully.');
+      setBandwidthReportPath(payload.path);
+      setBandwidthReportTruncated(payload.truncated);
+      setBandwidthReportContent(payload.content);
+    });
+
+    nextSocket.on('bandwidthReportError', (payload: BandwidthReportErrorPayload) => {
+      setBandwidthReportLoading(false);
+      setBandwidthReportStatus(payload.error);
+      setBandwidthReportOpen(true);
     });
 
     return () => {
@@ -662,6 +694,12 @@ export default function App() {
     setCurrentLobby(null);
     snapshotRef.current = null;
     latestSnapshotForUiRef.current = null;
+    setBandwidthReportOpen(false);
+    setBandwidthReportLoading(false);
+    setBandwidthReportStatus('');
+    setBandwidthReportContent('');
+    setBandwidthReportPath('');
+    setBandwidthReportTruncated(false);
     setSnapshot(null);
     socket?.emit('listLobbies');
   };
@@ -670,6 +708,29 @@ export default function App() {
   const togglePause = () => socket?.emit('togglePause');
   const resetLobby = () => socket?.emit('resetLobby');
   const applyModeSettings = () => socket?.emit('setModeSettings', adminSettings);
+  const requestBandwidthReport = () => {
+    if (!socket) {
+      return;
+    }
+    setBandwidthReportLoading(true);
+    setBandwidthReportStatus('Loading bandwidth report...');
+    socket.emit('requestBandwidthReport');
+  };
+
+  const downloadBandwidthReport = () => {
+    if (!bandwidthReportContent) {
+      return;
+    }
+    const blob = new Blob([bandwidthReportContent], { type: 'application/jsonl;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = bandwidthReportPath ? pathLeaf(bandwidthReportPath) : 'bandwidth-report.jsonl';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+  };
 
   const activeTargetLabel = isDeathmatch
     ? `Target ${snapshot?.modeSettings.deathmatchTarget ?? DEFAULT_MODE_SETTINGS.deathmatchTarget}`
@@ -1798,6 +1859,31 @@ export default function App() {
                   <button type="button" onClick={() => socket?.emit('transferAdmin', { playerId: adminTargetPlayerId })} disabled={!adminTargetPlayerId}>Pass admin</button>
                   <button type="button" onClick={() => socket?.emit('kickPlayer', { playerId: kickTargetPlayerId })} disabled={!kickTargetPlayerId}>Kick player</button>
                 </div>
+              </div>
+            </details>
+
+            <details className="adminAccordion">
+              <summary>Bandwidth report</summary>
+              <div className="adminAccordionBody">
+                <div className="controlsRow wrap">
+                  <button type="button" onClick={requestBandwidthReport} disabled={bandwidthReportLoading}>Load report</button>
+                  <button type="button" onClick={downloadBandwidthReport} disabled={!bandwidthReportContent}>Download JSONL</button>
+                </div>
+                <p className="adminTip">
+                  {bandwidthReportPath
+                    ? `${bandwidthReportPath}${bandwidthReportTruncated ? ' (latest window tail)' : ''}`
+                    : 'Loads the latest bandwidth JSONL report from the server.'}
+                </p>
+                {bandwidthReportStatus ? <p className="reportStatus">{bandwidthReportStatus}</p> : null}
+                {bandwidthReportContent ? (
+                  <textarea
+                    readOnly
+                    value={bandwidthReportContent}
+                    className="bandwidthReportViewer"
+                    rows={12}
+                    spellCheck={false}
+                  />
+                ) : null}
               </div>
             </details>
 
