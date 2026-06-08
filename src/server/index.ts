@@ -87,7 +87,14 @@ type LobbyRuntime = {
 const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
 const SNAPSHOT_RATE_HZ = Math.max(1, Math.min(60, parseLimit(process.env.SNAPSHOT_RATE_HZ, 20)));
-const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_RATE_HZ;
+const SNAPSHOT_RATE_RUNNING_HZ = Math.max(1, Math.min(60, parseLimit(process.env.SNAPSHOT_RATE_RUNNING_HZ, SNAPSHOT_RATE_HZ)));
+const SNAPSHOT_RATE_LOBBY_HZ = Math.max(1, Math.min(20, parseLimit(process.env.SNAPSHOT_RATE_LOBBY_HZ, 2)));
+const SNAPSHOT_RATE_IDLE_HZ = Math.max(1, Math.min(20, parseLimit(process.env.SNAPSHOT_RATE_IDLE_HZ, 3)));
+const SNAPSHOT_INTERVAL_RUNNING_MS = 1000 / SNAPSHOT_RATE_RUNNING_HZ;
+const SNAPSHOT_INTERVAL_LOBBY_MS = 1000 / SNAPSHOT_RATE_LOBBY_HZ;
+const SNAPSHOT_INTERVAL_IDLE_MS = 1000 / SNAPSHOT_RATE_IDLE_HZ;
+const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
+const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
 const PLAYER_RADIUS = 14;
 const BULLET_RADIUS = 4;
 const BASE_HEALTH = 100;
@@ -118,6 +125,11 @@ const GITHUB_ISSUES_TOKEN = (process.env.GITHUB_ISSUES_TOKEN ?? '').trim();
 const GITHUB_ISSUES_REPO = (process.env.GITHUB_ISSUES_REPO ?? '').trim();
 const DEFAULT_LOBBY_ID = 'main';
 type ActiveTeam = Exclude<TeamId, 'observer'>;
+
+type WsMetricTotals = {
+  events: number;
+  bytes: number;
+};
 
 type UserReportSeverity = 'low' | 'medium' | 'high';
 type UserReportPayload = {
@@ -258,6 +270,13 @@ app.post('/api/report-bug', async (request, response) => {
 const server = http.createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: { origin: true, credentials: true },
+  perMessageDeflate: {
+    threshold: 1024,
+    clientNoContextTakeover: true,
+    serverNoContextTakeover: true,
+    concurrencyLimit: 10,
+  },
+  httpCompression: true,
 });
 
 const clientDir = path.resolve(process.cwd(), 'dist/client');
@@ -270,56 +289,150 @@ if (fs.existsSync(clientDir)) {
 
 const lobbyRuntimes = new Map<string, LobbyRuntime>();
 const socketLobbyMap = new Map<string, string>();
+const wsOutboundMetrics = new Map<string, WsMetricTotals>();
+let wsMetricsWindowStartedAt = Date.now();
 let lobbyCounter = 1;
 let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null);
 
 createLobbyRuntime(DEFAULT_LOBBY_ID, 'Main Lobby', null);
 
+function snapshotIntervalMsForPhase(phase: MatchPhase) {
+  if (phase === 'running') {
+    return SNAPSHOT_INTERVAL_RUNNING_MS;
+  }
+  if (phase === 'lobby') {
+    return SNAPSHOT_INTERVAL_LOBBY_MS;
+  }
+  return SNAPSHOT_INTERVAL_IDLE_MS;
+}
+
+function estimatePayloadBytes(payload: unknown) {
+  if (payload === undefined) {
+    return 0;
+  }
+  try {
+    return Buffer.byteLength(JSON.stringify(payload));
+  } catch {
+    return 0;
+  }
+}
+
+function trackWsOutbound(eventName: string, payload: unknown, recipients: number) {
+  if (!WS_METRICS_ENABLED || recipients <= 0) {
+    return;
+  }
+  const eventBytes = estimatePayloadBytes(payload) * recipients;
+  const current = wsOutboundMetrics.get(eventName) ?? { events: 0, bytes: 0 };
+  current.events += recipients;
+  current.bytes += eventBytes;
+  wsOutboundMetrics.set(eventName, current);
+}
+
+function flushWsMetrics(force = false) {
+  if (!WS_METRICS_ENABLED) {
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - wsMetricsWindowStartedAt < WS_METRICS_LOG_INTERVAL_MS) {
+    return;
+  }
+
+  if (wsOutboundMetrics.size === 0) {
+    wsMetricsWindowStartedAt = now;
+    return;
+  }
+
+  const rows = Array.from(wsOutboundMetrics.entries())
+    .map(([eventName, totals]) => ({
+      eventName,
+      events: totals.events,
+      bytes: totals.bytes,
+    }))
+    .sort((left, right) => right.bytes - left.bytes);
+  const totalBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+  const totalEvents = rows.reduce((sum, row) => sum + row.events, 0);
+  const topRows = rows.slice(0, 6).map((row) => `${row.eventName}:${(row.bytes / 1024).toFixed(1)}KB/${row.events}`).join(', ');
+
+  console.log(
+    `[WS outbound ${(now - wsMetricsWindowStartedAt) / 1000}s] total=${(totalBytes / 1024).toFixed(1)}KB events=${totalEvents} top=[${topRows}]`,
+  );
+
+  wsOutboundMetrics.clear();
+  wsMetricsWindowStartedAt = now;
+}
+
+function emitToLobby<EventPayload>(lobbyId: string, eventName: string, payload: EventPayload) {
+  const roomId = lobbyRoom(lobbyId);
+  const recipients = io.sockets.adapter.rooms.get(roomId)?.size ?? 0;
+  io.to(roomId).emit(eventName, payload);
+  trackWsOutbound(eventName, payload, recipients);
+  flushWsMetrics();
+}
+
+function emitToSocket<EventPayload>(socketId: string, eventName: string, payload: EventPayload) {
+  io.to(socketId).emit(eventName, payload);
+  trackWsOutbound(eventName, payload, 1);
+  flushWsMetrics();
+}
+
+function emitGlobal<EventPayload>(eventName: string, payload: EventPayload) {
+  const recipients = io.engine.clientsCount;
+  io.emit(eventName, payload);
+  trackWsOutbound(eventName, payload, recipients);
+  flushWsMetrics();
+}
+
+function emitDirect<EventPayload>(socket: Socket<ClientToServerEvents, ServerToClientEvents>, eventName: string, payload: EventPayload) {
+  socket.emit(eventName as never, payload as never);
+  trackWsOutbound(eventName, payload, 1);
+  flushWsMetrics();
+}
+
 io.on('connection', (socket) => {
-  socket.emit('lobbyList', buildLobbyList());
+  emitDirect(socket, 'lobbyList', buildLobbyList());
 
   socket.on('listLobbies', () => {
-    socket.emit('lobbyList', buildLobbyList());
+    emitDirect(socket, 'lobbyList', buildLobbyList());
   });
 
   socket.on('createLobby', ({ name, playerName, password, clientKey }: { name: string; playerName: string; password?: string; clientKey?: string }) => {
     if (lobbyRuntimes.size >= MAX_LOBBIES) {
-      socket.emit('message', `Lobby limit reached (${MAX_LOBBIES}).`);
+      emitDirect(socket, 'message', `Lobby limit reached (${MAX_LOBBIES}).`);
       return;
     }
     const sanitizedPassword = sanitizeLobbyPassword(password);
     const runtime = createLobbyRuntime(nextLobbyId(), sanitizeLobbyName(name), sanitizedPassword);
     joinSocketToLobby(socket, runtime, playerName, { forceAdmin: true, clientKey });
-    socket.emit('message', `Lobby ${runtime.name} created. You are the admin.`);
+    emitDirect(socket, 'message', `Lobby ${runtime.name} created. You are the admin.`);
     emitLobbyList();
   });
 
   socket.on('joinLobby', ({ lobbyId, name, password, clientKey }: { lobbyId: string; name: string; password?: string; clientKey?: string }) => {
     const runtime = lobbyRuntimes.get(lobbyId);
     if (!runtime) {
-      socket.emit('message', 'That lobby no longer exists.');
-      socket.emit('lobbyList', buildLobbyList());
+      emitDirect(socket, 'message', 'That lobby no longer exists.');
+      emitDirect(socket, 'lobbyList', buildLobbyList());
       return;
     }
 
     const current = getSocketLobby(socket.id);
     if (current?.id === lobbyId && runtime.state.players.has(socket.id)) {
-      socket.emit('message', `Already in ${runtime.name}.`);
+      emitDirect(socket, 'message', `Already in ${runtime.name}.`);
       return;
     }
 
     if (runtime.state.password && runtime.state.password !== sanitizeLobbyPassword(password)) {
-      socket.emit('message', 'Lobby password is incorrect.');
+      emitDirect(socket, 'message', 'Lobby password is incorrect.');
       return;
     }
 
     if (countLobbyHumans(runtime) >= MAX_PLAYERS_PER_LOBBY) {
-      socket.emit('message', `Lobby is full (${MAX_PLAYERS_PER_LOBBY} players max).`);
+      emitDirect(socket, 'message', `Lobby is full (${MAX_PLAYERS_PER_LOBBY} players max).`);
       return;
     }
     const countedInTotal = current?.state.players.has(socket.id) ? 1 : 0;
     if (countTotalHumans() - countedInTotal >= MAX_TOTAL_PLAYERS) {
-      socket.emit('message', `Server is full (${MAX_TOTAL_PLAYERS} total players max).`);
+      emitDirect(socket, 'message', `Server is full (${MAX_TOTAL_PLAYERS} total players max).`);
       return;
     }
 
@@ -330,8 +443,8 @@ io.on('connection', (socket) => {
 
   socket.on('leaveLobby', () => {
     if (leaveLobby(socket.id, '', false)) {
-      socket.emit('message', 'Left lobby.');
-      socket.emit('lobbyList', buildLobbyList());
+      emitDirect(socket, 'message', 'Left lobby.');
+      emitDirect(socket, 'lobbyList', buildLobbyList());
     }
   });
 
@@ -346,7 +459,7 @@ io.on('connection', (socket) => {
       }
       const target = state.players.get(playerId);
       if (!target || target.isBot) {
-        socket.emit('message', 'Selected player is not available for admin transfer.');
+        emitDirect(socket, 'message', 'Selected player is not available for admin transfer.');
         return;
       }
       state.adminId = target.id;
@@ -377,8 +490,8 @@ io.on('connection', (socket) => {
     if (!targetName) {
       return;
     }
-    io.to(playerId).emit('kicked', { reason: 'You were removed from the lobby by admin.' });
-    io.to(playerId).emit('message', 'You were removed from the lobby by admin.');
+    emitToSocket(playerId, 'kicked', { reason: 'You were removed from the lobby by admin.' });
+    emitToSocket(playerId, 'message', 'You were removed from the lobby by admin.');
     leaveLobby(playerId, `${targetName} was removed by admin.`, false);
   });
 
@@ -393,7 +506,7 @@ io.on('connection', (socket) => {
       }
       const botCount = Array.from(state.players.values()).filter((player) => player.isBot).length;
       if (botCount >= MAX_BOTS_PER_LOBBY) {
-        socket.emit('message', `Bot limit reached in this lobby (${MAX_BOTS_PER_LOBBY}).`);
+        emitDirect(socket, 'message', `Bot limit reached in this lobby (${MAX_BOTS_PER_LOBBY}).`);
         return;
       }
       const bot = createBot();
@@ -674,7 +787,7 @@ function buildLobbyList(): LobbySummary[] {
 }
 
 function emitLobbyList() {
-  io.emit('lobbyList', buildLobbyList());
+  emitGlobal('lobbyList', buildLobbyList());
 }
 
 function joinSocketToLobby(
@@ -736,7 +849,7 @@ function joinSocketToLobby(
     }
     refreshAdminFlags();
 
-    socket.emit('joined', { observer, admin: player.id === state.adminId, team, lobbyId: runtime.id, lobbyName: runtime.name });
+    emitDirect(socket, 'joined', { observer, admin: player.id === state.adminId, team, lobbyId: runtime.id, lobbyName: runtime.name });
     emitSnapshot({ force: true, includeMap: true, targetSocketId: socket.id });
     broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
     emitSnapshot({ force: true });
@@ -774,7 +887,7 @@ function leaveLobby(socketId: string, reason: string, preserveForReconnect: bool
       refreshAdminFlags();
     }
     state.message = reason || `${player.name} left the lobby.`;
-    io.to(lobbyRoom(runtime.id)).emit('message', state.message);
+    emitToLobby(runtime.id, 'message', state.message);
     emitSnapshot();
   });
 
@@ -1016,22 +1129,23 @@ function emitSnapshot(options?: { force?: boolean; includeMap?: boolean; targetS
   const includeMap = options?.includeMap ?? false;
   const targetSocketId = options?.targetSocketId;
   const now = Date.now();
-  if (!force && now - state.lastSnapshotAt < SNAPSHOT_INTERVAL_MS) {
+  const snapshotIntervalMs = snapshotIntervalMsForPhase(state.phase);
+  if (!force && now - state.lastSnapshotAt < snapshotIntervalMs) {
     return;
   }
   state.lastSnapshotAt = now;
 
   const snapshot = buildSnapshot(includeMap);
   if (targetSocketId) {
-    io.to(targetSocketId).emit('snapshot', snapshot);
+    emitToSocket(targetSocketId, 'snapshot', snapshot);
     return;
   }
-  io.to(lobbyRoom(state.id)).emit('snapshot', snapshot);
+  emitToLobby(state.id, 'snapshot', snapshot);
 }
 
 function broadcast(message: string) {
   state.message = message;
-  io.to(lobbyRoom(state.id)).emit('message', message);
+  emitToLobby(state.id, 'message', message);
 }
 
 function buildSnapshot(includeMap = false): GameSnapshot {
@@ -1224,7 +1338,7 @@ function updateControlPoints(deltaSeconds: number) {
       } else {
         state.message = `${point.owner === 'red' ? 'Red Team' : 'Blue Team'} captured point ${point.label}.`;
       }
-      io.to(lobbyRoom(state.id)).emit('message', state.message);
+      emitToLobby(state.id, 'message', state.message);
     }
   }
 
