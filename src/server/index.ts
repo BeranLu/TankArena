@@ -119,6 +119,9 @@ const SNAPSHOT_INTERVAL_SLOW_MS = 1000 / SNAPSHOT_RATE_SLOW_HZ;
 const NET_SPLIT_CHANNELS_ENABLED = (process.env.NET_SPLIT_CHANNELS_ENABLED ?? '1') !== '0';
 const NET_LEGACY_SNAPSHOT_ENABLED = (process.env.NET_LEGACY_SNAPSHOT_ENABLED ?? '0') !== '0';
 const NET_KEYFRAME_INTERVAL_MS = Math.max(500, parseLimit(process.env.NET_KEYFRAME_INTERVAL_MS, 3000));
+const WS_REPORT_ENABLED = (process.env.WS_REPORT_ENABLED ?? '1') !== '0';
+const WS_REPORT_PATH = (process.env.WS_REPORT_PATH ?? 'reports/bandwidth-report.jsonl').trim();
+const WS_REPORT_PROJECTED_PLAYER_MULTIPLIER = Math.max(1, parseLimit(process.env.WS_REPORT_PROJECTED_PLAYER_MULTIPLIER, 2));
 const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
 const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
 const SNAPSHOT_QUANTIZE_ENABLED = (process.env.SNAPSHOT_QUANTIZE_ENABLED ?? '1') !== '0';
@@ -161,6 +164,22 @@ type ActiveTeam = Exclude<TeamId, 'observer'>;
 type WsMetricTotals = {
   events: number;
   bytes: number;
+};
+type WsReportWindow = {
+  generatedAt: string;
+  windowMs: number;
+  totalBytes: number;
+  totalEvents: number;
+  bytesPerMinute: number;
+  averageBytesPerEvent: number;
+  topEvents: Array<{ eventName: string; events: number; bytes: number }>;
+  snapshotPayload?: {
+    samples: number;
+    averageBytes: number;
+    p95Bytes: number;
+    maxBytes: number;
+  };
+  projectedBytesPerMinuteAtMultiplier: number | null;
 };
 type SnapshotPayloadStats = {
   samples: number;
@@ -326,6 +345,7 @@ const socketLobbyMap = new Map<string, string>();
 const wsOutboundMetrics = new Map<string, WsMetricTotals>();
 const snapshotPayloadStats: SnapshotPayloadStats = { samples: 0, totalBytes: 0, maxBytes: 0, sampleBytes: [] };
 let wsMetricsWindowStartedAt = Date.now();
+let wsReportFileReady = false;
 let lobbyCounter = 1;
 let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null);
 
@@ -404,6 +424,8 @@ function flushWsMetrics(force = false) {
     `[WS outbound ${(now - wsMetricsWindowStartedAt) / 1000}s] total=${(totalBytes / 1024).toFixed(1)}KB events=${totalEvents} top=[${topRows}]`,
   );
 
+  writeWsReportWindow(now, rows, totalBytes, totalEvents);
+
   if (SNAPSHOT_SIZE_DEBUG_ENABLED && snapshotPayloadStats.samples > 0) {
     const sorted = [...snapshotPayloadStats.sampleBytes].sort((left, right) => left - right);
     const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
@@ -420,6 +442,65 @@ function flushWsMetrics(force = false) {
   snapshotPayloadStats.maxBytes = 0;
   snapshotPayloadStats.sampleBytes = [];
   wsMetricsWindowStartedAt = now;
+}
+
+function writeWsReportWindow(
+  now: number,
+  rows: Array<{ eventName: string; events: number; bytes: number }>,
+  totalBytes: number,
+  totalEvents: number,
+) {
+  if (!WS_REPORT_ENABLED) {
+    return;
+  }
+
+  const windowMs = Math.max(1, now - wsMetricsWindowStartedAt);
+  const report: WsReportWindow = {
+    generatedAt: new Date(now).toISOString(),
+    windowMs,
+    totalBytes,
+    totalEvents,
+    bytesPerMinute: totalBytes * (60000 / windowMs),
+    averageBytesPerEvent: totalEvents > 0 ? totalBytes / totalEvents : 0,
+    topEvents: rows.slice(0, 10),
+    projectedBytesPerMinuteAtMultiplier: rows.length > 0
+      ? totalBytes * WS_REPORT_PROJECTED_PLAYER_MULTIPLIER * (60000 / windowMs)
+      : null,
+  };
+
+  if (SNAPSHOT_SIZE_DEBUG_ENABLED && snapshotPayloadStats.samples > 0) {
+    const sorted = [...snapshotPayloadStats.sampleBytes].sort((left, right) => left - right);
+    const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+    const p95Bytes = sorted[p95Index] ?? 0;
+    report.snapshotPayload = {
+      samples: snapshotPayloadStats.samples,
+      averageBytes: snapshotPayloadStats.totalBytes / snapshotPayloadStats.samples,
+      p95Bytes,
+      maxBytes: snapshotPayloadStats.maxBytes,
+    };
+  }
+
+  appendWsReportLine(report);
+}
+
+function appendWsReportLine(report: WsReportWindow) {
+  try {
+    ensureWsReportDirectory();
+    fs.appendFileSync(WS_REPORT_PATH, `${JSON.stringify(report)}\n`, 'utf8');
+  } catch (error) {
+    console.error('Failed to append WS report window:', error);
+  }
+}
+
+function ensureWsReportDirectory() {
+  if (wsReportFileReady) {
+    return;
+  }
+  const directory = path.dirname(WS_REPORT_PATH);
+  if (directory && directory !== '.') {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  wsReportFileReady = true;
 }
 
 function emitToLobby<E extends ServerEventName>(lobbyId: string, eventName: E, ...args: Parameters<ServerToClientEvents[E]>) {

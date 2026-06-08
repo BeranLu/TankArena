@@ -116,6 +116,7 @@ Goal: reduce outbound WebSocket traffic while preserving gameplay feel in active
 ### Phase 0 - Live Monitoring Baseline (Immediate)
 
 - [x] (S) Add per-event outbound WS metrics logs (bytes and event counts).
+- [x] (S) Add automatic WS JSONL report sink for baseline capture and forecasting.
 - [ ] (S) Record 24h baseline after deploy:
   - [ ] Capture total outbound WS KB per minute.
   - [ ] Capture top events by bytes (`snapshot`, `message`, `lobbyList`, `joined`).
