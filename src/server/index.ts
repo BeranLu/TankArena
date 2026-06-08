@@ -130,6 +130,8 @@ type WsMetricTotals = {
   events: number;
   bytes: number;
 };
+type ServerEventName = keyof ServerToClientEvents;
+type ServerEventPayload<E extends ServerEventName> = Parameters<ServerToClientEvents[E]>[0];
 
 type UserReportSeverity = 'low' | 'medium' | 'high';
 type UserReportPayload = {
@@ -270,12 +272,7 @@ app.post('/api/report-bug', async (request, response) => {
 const server = http.createServer(app);
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: { origin: true, credentials: true },
-  perMessageDeflate: {
-    threshold: 1024,
-    clientNoContextTakeover: true,
-    serverNoContextTakeover: true,
-    concurrencyLimit: 10,
-  },
+  perMessageDeflate: true,
   httpCompression: true,
 });
 
@@ -361,7 +358,7 @@ function flushWsMetrics(force = false) {
   wsMetricsWindowStartedAt = now;
 }
 
-function emitToLobby<EventPayload>(lobbyId: string, eventName: string, payload: EventPayload) {
+function emitToLobby<E extends ServerEventName>(lobbyId: string, eventName: E, payload: ServerEventPayload<E>) {
   const roomId = lobbyRoom(lobbyId);
   const recipients = io.sockets.adapter.rooms.get(roomId)?.size ?? 0;
   io.to(roomId).emit(eventName, payload);
@@ -369,21 +366,21 @@ function emitToLobby<EventPayload>(lobbyId: string, eventName: string, payload: 
   flushWsMetrics();
 }
 
-function emitToSocket<EventPayload>(socketId: string, eventName: string, payload: EventPayload) {
+function emitToSocket<E extends ServerEventName>(socketId: string, eventName: E, payload: ServerEventPayload<E>) {
   io.to(socketId).emit(eventName, payload);
   trackWsOutbound(eventName, payload, 1);
   flushWsMetrics();
 }
 
-function emitGlobal<EventPayload>(eventName: string, payload: EventPayload) {
+function emitGlobal<E extends ServerEventName>(eventName: E, payload: ServerEventPayload<E>) {
   const recipients = io.engine.clientsCount;
   io.emit(eventName, payload);
   trackWsOutbound(eventName, payload, recipients);
   flushWsMetrics();
 }
 
-function emitDirect<EventPayload>(socket: Socket<ClientToServerEvents, ServerToClientEvents>, eventName: string, payload: EventPayload) {
-  socket.emit(eventName as never, payload as never);
+function emitDirect<E extends ServerEventName>(socket: Socket<ClientToServerEvents, ServerToClientEvents>, eventName: E, payload: ServerEventPayload<E>) {
+  socket.emit(eventName, payload);
   trackWsOutbound(eventName, payload, 1);
   flushWsMetrics();
 }
