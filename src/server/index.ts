@@ -88,10 +88,8 @@ const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
 const SNAPSHOT_RATE_HZ = Math.max(1, Math.min(60, parseLimit(process.env.SNAPSHOT_RATE_HZ, 20)));
 const SNAPSHOT_RATE_RUNNING_HZ = Math.max(1, Math.min(60, parseLimit(process.env.SNAPSHOT_RATE_RUNNING_HZ, SNAPSHOT_RATE_HZ)));
-const SNAPSHOT_RATE_LOBBY_HZ = Math.max(1, Math.min(20, parseLimit(process.env.SNAPSHOT_RATE_LOBBY_HZ, 2)));
 const SNAPSHOT_RATE_IDLE_HZ = Math.max(1, Math.min(20, parseLimit(process.env.SNAPSHOT_RATE_IDLE_HZ, 3)));
 const SNAPSHOT_INTERVAL_RUNNING_MS = 1000 / SNAPSHOT_RATE_RUNNING_HZ;
-const SNAPSHOT_INTERVAL_LOBBY_MS = 1000 / SNAPSHOT_RATE_LOBBY_HZ;
 const SNAPSHOT_INTERVAL_IDLE_MS = 1000 / SNAPSHOT_RATE_IDLE_HZ;
 const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
 const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
@@ -293,11 +291,8 @@ let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null)
 createLobbyRuntime(DEFAULT_LOBBY_ID, 'Main Lobby', null);
 
 function snapshotIntervalMsForPhase(phase: MatchPhase) {
-  if (phase === 'running') {
+  if (phase === 'running' || phase === 'lobby') {
     return SNAPSHOT_INTERVAL_RUNNING_MS;
-  }
-  if (phase === 'lobby') {
-    return SNAPSHOT_INTERVAL_LOBBY_MS;
   }
   return SNAPSHOT_INTERVAL_IDLE_MS;
 }
