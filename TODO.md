@@ -134,28 +134,26 @@ Goal: reduce outbound WebSocket traffic while preserving gameplay feel in active
 
 ### Phase 2 - Payload Size Reduction (Week 1 to Week 2)
 
-- [ ] (M) Quantize high-frequency numeric fields in snapshots:
-  - [ ] position/angle precision clamp.
-  - [ ] score/timer precision clamp.
-- [ ] (M) Split snapshot schema into fast lane and slow lane events:
-  - [ ] Fast lane: player/projectile transforms and health.
-  - [ ] Slow lane: settings/admin metadata/round summaries.
-- [ ] (S) Add payload-size debug output for `snapshot` shape revisions.
+- [x] (M) Quantize high-frequency numeric fields in snapshots:
+  - [x] position/angle precision clamp.
+  - [x] score/timer precision clamp.
+- [x] (M) Split snapshot schema into fast lane and slow lane events:
+  - [x] Fast lane: player/projectile transforms and health.
+  - [x] Slow lane: settings/admin metadata/round summaries.
+- [x] (S) Add payload-size debug output for `snapshot` shape revisions.
 
 ### Phase 3 - Structural Wins (Week 2 to Week 3)
 
 - [ ] (L) Delta snapshots per client:
-  - [ ] Track last acknowledged state per socket.
-  - [ ] Send changed entities only.
-  - [ ] Add periodic full snapshot resync safety.
-- [ ] (L) Interest management (relevance culling):
-  - [ ] Nearby entity filtering for players.
-  - [ ] Wider observer radius fallback.
-  - [ ] Keep objective-critical entities always included.
+  - [x] Add per-socket replication cursor scaffold (sequence/keyframe metadata hooks).
+  - [x] Track last acknowledged state per socket.
+  - [x] Send changed entities only.
+  - [x] Add periodic full snapshot resync safety.
+- [x] (S) Defer interest management for now (arena scale is small, low practical gain currently).
 
 ### Validation and Exit Criteria
 
-- [ ] (S) Add a release checkpoint requiring WS metrics review before production promote.
+- [x] (S) Add a release checkpoint requiring WS metrics review before production promote.
 - [ ] (S) Confirm no visible gameplay degradation (movement smoothness/shooting responsiveness) on desktop and mobile.
 - [ ] (S) Target measurable reductions:
   - [ ] At least 40% reduction in average outbound WS bytes/min from baseline.

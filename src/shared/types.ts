@@ -114,6 +114,51 @@ export interface GameSnapshot {
   roundResult: RoundResult | null;
 }
 
+export type NetChannel = 'fast' | 'slow';
+export type NetFrameType = 'keyframe' | 'delta';
+
+export interface NetFrameMeta {
+  protocolVersion: 2;
+  channel: NetChannel;
+  frameType: NetFrameType;
+  sequence: number;
+  keyframeId: number;
+}
+
+export interface NetAckPayload {
+  fastSequence?: number;
+  slowSequence?: number;
+  fastKeyframeId?: number;
+  slowKeyframeId?: number;
+}
+
+export interface StateFastSnapshot {
+  net?: NetFrameMeta;
+  phase: MatchPhase;
+  countdownRemainingMs: number | null;
+  mode: GameMode;
+  players: PlayerSnapshot[];
+  projectiles: ProjectileSnapshot[];
+  controlPoints: ControlPointSnapshot[];
+  flagsHome: { red: boolean; blue: boolean };
+  kingHealth: { red: number; blue: number };
+  score: { red: number; blue: number };
+  activePlayers: number;
+  connectedClients: number;
+  playersRemoved?: string[];
+  projectilesRemoved?: string[];
+  controlPointsRemoved?: string[];
+}
+
+export interface StateSlowSnapshot {
+  net?: NetFrameMeta;
+  modeSettings: ModeSettings;
+  map?: ArenaMap;
+  adminId: string | null;
+  message: string;
+  roundResult: RoundResult | null;
+}
+
 export interface LobbySummary {
   id: string;
   name: string;
@@ -142,10 +187,13 @@ export interface ClientToServerEvents {
   togglePause: () => void;
   resetLobby: () => void;
   input: (input: PlayerInput) => void;
+  netAck: (payload: NetAckPayload) => void;
 }
 
 export interface ServerToClientEvents {
   snapshot: (snapshot: GameSnapshot) => void;
+  stateFast: (snapshot: StateFastSnapshot) => void;
+  stateSlow: (snapshot: StateSlowSnapshot) => void;
   joined: (payload: { observer: boolean; admin: boolean; team: TeamId; lobbyId: string; lobbyName: string }) => void;
   lobbyList: (lobbies: LobbySummary[]) => void;
   message: (text: string) => void;

@@ -18,10 +18,15 @@ import type {
   LobbySummary,
   MatchPhase,
   ModeSettings,
+  NetAckPayload,
+  NetChannel,
+  NetFrameMeta,
   PlayerInput,
   PlayerSnapshot,
   ProjectileSnapshot,
   RoundResult,
+  StateFastSnapshot,
+  StateSlowSnapshot,
   ServerToClientEvents,
   TeamId,
 } from '../shared/types.js';
@@ -54,6 +59,21 @@ type ProjectileState = ProjectileSnapshot & {
 type FlagState = { x: number; y: number; homeX: number; homeY: number; carriedBy: string | null };
 type Point = { x: number; y: number };
 type BotMovementTarget = Point & { preferredDistance: number };
+type ReplicationCursor = {
+  fastSequence: number;
+  slowSequence: number;
+  fastKeyframeId: number;
+  slowKeyframeId: number;
+  lastFastKeyframeAt: number;
+  lastSlowKeyframeAt: number;
+  lastAckedFastSequence: number;
+  lastAckedSlowSequence: number;
+  lastFastPayloadBytes: number;
+  lastSlowPayloadBytes: number;
+  lastPlayersById: Map<string, string>;
+  lastProjectilesById: Map<string, string>;
+  lastControlPointsById: Map<string, string>;
+};
 type LobbyState = {
   id: string;
   name: string;
@@ -75,6 +95,8 @@ type LobbyState = {
   message: string;
   roundResult: RoundResult | null;
   lastSnapshotAt: number;
+  lastSlowSnapshotAt: number;
+  replicationCursors: Map<string, ReplicationCursor>;
 };
 type LobbyRuntime = {
   id: string;
@@ -91,8 +113,19 @@ const SNAPSHOT_RATE_RUNNING_HZ = Math.max(1, Math.min(60, parseLimit(process.env
 const SNAPSHOT_RATE_IDLE_HZ = Math.max(1, Math.min(20, parseLimit(process.env.SNAPSHOT_RATE_IDLE_HZ, 3)));
 const SNAPSHOT_INTERVAL_RUNNING_MS = 1000 / SNAPSHOT_RATE_RUNNING_HZ;
 const SNAPSHOT_INTERVAL_IDLE_MS = 1000 / SNAPSHOT_RATE_IDLE_HZ;
+const SNAPSHOT_RATE_SLOW_HZ = Math.max(1, Math.min(10, parseLimit(process.env.SNAPSHOT_RATE_SLOW_HZ, 2)));
+const SNAPSHOT_INTERVAL_SLOW_MS = 1000 / SNAPSHOT_RATE_SLOW_HZ;
+const NET_SPLIT_CHANNELS_ENABLED = (process.env.NET_SPLIT_CHANNELS_ENABLED ?? '1') !== '0';
+const NET_LEGACY_SNAPSHOT_ENABLED = (process.env.NET_LEGACY_SNAPSHOT_ENABLED ?? '0') !== '0';
+const NET_KEYFRAME_INTERVAL_MS = Math.max(500, parseLimit(process.env.NET_KEYFRAME_INTERVAL_MS, 3000));
 const WS_METRICS_ENABLED = (process.env.WS_METRICS_ENABLED ?? '1') !== '0';
 const WS_METRICS_LOG_INTERVAL_MS = Math.max(5000, parseLimit(process.env.WS_METRICS_LOG_INTERVAL_MS, 60000));
+const SNAPSHOT_QUANTIZE_ENABLED = (process.env.SNAPSHOT_QUANTIZE_ENABLED ?? '1') !== '0';
+const SNAPSHOT_POSITION_DECIMALS = clampNumber(parseDecimal(process.env.SNAPSHOT_POSITION_DECIMALS, 1), 0, 3);
+const SNAPSHOT_ANGLE_DECIMALS = clampNumber(parseDecimal(process.env.SNAPSHOT_ANGLE_DECIMALS, 2), 0, 4);
+const SNAPSHOT_SCORE_DECIMALS = clampNumber(parseDecimal(process.env.SNAPSHOT_SCORE_DECIMALS, 1), 0, 3);
+const SNAPSHOT_TIMER_STEP_MS = clampNumber(parseDecimal(process.env.SNAPSHOT_TIMER_STEP_MS, 100), 10, 1000);
+const SNAPSHOT_SIZE_DEBUG_ENABLED = (process.env.SNAPSHOT_SIZE_DEBUG_ENABLED ?? '0') !== '0';
 const PLAYER_RADIUS = 14;
 const BULLET_RADIUS = 4;
 const BASE_HEALTH = 100;
@@ -127,6 +160,12 @@ type ActiveTeam = Exclude<TeamId, 'observer'>;
 type WsMetricTotals = {
   events: number;
   bytes: number;
+};
+type SnapshotPayloadStats = {
+  samples: number;
+  totalBytes: number;
+  maxBytes: number;
+  sampleBytes: number[];
 };
 type ServerEventName = keyof ServerToClientEvents;
 
@@ -284,6 +323,7 @@ if (fs.existsSync(clientDir)) {
 const lobbyRuntimes = new Map<string, LobbyRuntime>();
 const socketLobbyMap = new Map<string, string>();
 const wsOutboundMetrics = new Map<string, WsMetricTotals>();
+const snapshotPayloadStats: SnapshotPayloadStats = { samples: 0, totalBytes: 0, maxBytes: 0, sampleBytes: [] };
 let wsMetricsWindowStartedAt = Date.now();
 let lobbyCounter = 1;
 let state: LobbyState = createLobbyState('__bootstrap', 'Bootstrap Lobby', null);
@@ -312,11 +352,26 @@ function trackWsOutbound(eventName: string, payload: unknown, recipients: number
   if (!WS_METRICS_ENABLED || recipients <= 0) {
     return;
   }
-  const eventBytes = estimatePayloadBytes(payload) * recipients;
+  const payloadBytes = estimatePayloadBytes(payload);
+  const eventBytes = payloadBytes * recipients;
   const current = wsOutboundMetrics.get(eventName) ?? { events: 0, bytes: 0 };
   current.events += recipients;
   current.bytes += eventBytes;
   wsOutboundMetrics.set(eventName, current);
+
+  if (eventName === 'snapshot') {
+    trackSnapshotPayloadSample(payloadBytes);
+  }
+}
+
+function trackSnapshotPayloadSample(payloadBytes: number) {
+  if (!SNAPSHOT_SIZE_DEBUG_ENABLED || payloadBytes <= 0) {
+    return;
+  }
+  snapshotPayloadStats.samples += 1;
+  snapshotPayloadStats.totalBytes += payloadBytes;
+  snapshotPayloadStats.maxBytes = Math.max(snapshotPayloadStats.maxBytes, payloadBytes);
+  snapshotPayloadStats.sampleBytes.push(payloadBytes);
 }
 
 function flushWsMetrics(force = false) {
@@ -348,7 +403,21 @@ function flushWsMetrics(force = false) {
     `[WS outbound ${(now - wsMetricsWindowStartedAt) / 1000}s] total=${(totalBytes / 1024).toFixed(1)}KB events=${totalEvents} top=[${topRows}]`,
   );
 
+  if (SNAPSHOT_SIZE_DEBUG_ENABLED && snapshotPayloadStats.samples > 0) {
+    const sorted = [...snapshotPayloadStats.sampleBytes].sort((left, right) => left - right);
+    const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+    const p95Bytes = sorted[p95Index] ?? 0;
+    const averageBytes = snapshotPayloadStats.totalBytes / snapshotPayloadStats.samples;
+    console.log(
+      `[WS snapshot payload ${(now - wsMetricsWindowStartedAt) / 1000}s] samples=${snapshotPayloadStats.samples} avg=${(averageBytes / 1024).toFixed(2)}KB p95=${(p95Bytes / 1024).toFixed(2)}KB max=${(snapshotPayloadStats.maxBytes / 1024).toFixed(2)}KB`,
+    );
+  }
+
   wsOutboundMetrics.clear();
+  snapshotPayloadStats.samples = 0;
+  snapshotPayloadStats.totalBytes = 0;
+  snapshotPayloadStats.maxBytes = 0;
+  snapshotPayloadStats.sampleBytes = [];
   wsMetricsWindowStartedAt = now;
 }
 
@@ -663,6 +732,22 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('netAck', (payload: NetAckPayload) => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime || !payload) {
+      return;
+    }
+    runInLobby(runtime, () => {
+      const cursor = getOrCreateReplicationCursor(socket.id);
+      if (Number.isFinite(payload.fastSequence)) {
+        cursor.lastAckedFastSequence = Math.max(cursor.lastAckedFastSequence, Math.floor(payload.fastSequence as number));
+      }
+      if (Number.isFinite(payload.slowSequence)) {
+        cursor.lastAckedSlowSequence = Math.max(cursor.lastAckedSlowSequence, Math.floor(payload.slowSequence as number));
+      }
+    });
+  });
+
   socket.on('disconnect', () => {
     leaveLobby(socket.id, '', true);
   });
@@ -674,6 +759,18 @@ function parseLimit(raw: string | undefined, fallback: number) {
     return fallback;
   }
   return parsed;
+}
+
+function parseDecimal(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseFloat((raw ?? '').trim());
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function nextLobbyId() {
@@ -717,7 +814,123 @@ function createLobbyState(id: string, name: string, password: string | null): Lo
     message: 'Waiting for players to join the lobby.',
     roundResult: null,
     lastSnapshotAt: 0,
+    lastSlowSnapshotAt: 0,
+    replicationCursors: new Map<string, ReplicationCursor>(),
   };
+}
+
+function createReplicationCursor(): ReplicationCursor {
+  return {
+    fastSequence: 0,
+    slowSequence: 0,
+    fastKeyframeId: 0,
+    slowKeyframeId: 0,
+    lastFastKeyframeAt: 0,
+    lastSlowKeyframeAt: 0,
+    lastAckedFastSequence: 0,
+    lastAckedSlowSequence: 0,
+    lastFastPayloadBytes: 0,
+    lastSlowPayloadBytes: 0,
+    lastPlayersById: new Map<string, string>(),
+    lastProjectilesById: new Map<string, string>(),
+    lastControlPointsById: new Map<string, string>(),
+  };
+}
+
+function computeEntitySignature(entity: unknown) {
+  try {
+    return JSON.stringify(entity);
+  } catch {
+    return '';
+  }
+}
+
+function buildFastDelta(base: StateFastSnapshot, cursor: ReplicationCursor): StateFastSnapshot {
+  const playersNext = new Map(base.players.map((entity) => [entity.id, computeEntitySignature(entity)]));
+  const projectilesNext = new Map(base.projectiles.map((entity) => [entity.id, computeEntitySignature(entity)]));
+  const controlPointsNext = new Map(base.controlPoints.map((entity) => [entity.id, computeEntitySignature(entity)]));
+
+  const playersChanged = base.players.filter((entity) => cursor.lastPlayersById.get(entity.id) !== playersNext.get(entity.id));
+  const projectilesChanged = base.projectiles.filter((entity) => cursor.lastProjectilesById.get(entity.id) !== projectilesNext.get(entity.id));
+  const controlPointsChanged = base.controlPoints.filter((entity) => cursor.lastControlPointsById.get(entity.id) !== controlPointsNext.get(entity.id));
+
+  const playersRemoved = Array.from(cursor.lastPlayersById.keys()).filter((id) => !playersNext.has(id));
+  const projectilesRemoved = Array.from(cursor.lastProjectilesById.keys()).filter((id) => !projectilesNext.has(id));
+  const controlPointsRemoved = Array.from(cursor.lastControlPointsById.keys()).filter((id) => !controlPointsNext.has(id));
+
+  cursor.lastPlayersById = playersNext;
+  cursor.lastProjectilesById = projectilesNext;
+  cursor.lastControlPointsById = controlPointsNext;
+
+  return {
+    ...base,
+    players: playersChanged,
+    projectiles: projectilesChanged,
+    controlPoints: controlPointsChanged,
+    playersRemoved,
+    projectilesRemoved,
+    controlPointsRemoved,
+  };
+}
+
+function seedFastEntityCaches(base: StateFastSnapshot, cursor: ReplicationCursor) {
+  cursor.lastPlayersById = new Map(base.players.map((entity) => [entity.id, computeEntitySignature(entity)]));
+  cursor.lastProjectilesById = new Map(base.projectiles.map((entity) => [entity.id, computeEntitySignature(entity)]));
+  cursor.lastControlPointsById = new Map(base.controlPoints.map((entity) => [entity.id, computeEntitySignature(entity)]));
+}
+
+function getOrCreateReplicationCursor(socketId: string): ReplicationCursor {
+  const existing = state.replicationCursors.get(socketId);
+  if (existing) {
+    return existing;
+  }
+  const created = createReplicationCursor();
+  state.replicationCursors.set(socketId, created);
+  return created;
+}
+
+function nextFrameMeta(cursor: ReplicationCursor, channel: NetChannel, now: number, forceKeyframe = false): NetFrameMeta {
+  const isFast = channel === 'fast';
+  const lastKeyframeAt = isFast ? cursor.lastFastKeyframeAt : cursor.lastSlowKeyframeAt;
+  const shouldKeyframe = forceKeyframe || (now - lastKeyframeAt >= NET_KEYFRAME_INTERVAL_MS);
+
+  let sequence = isFast ? cursor.fastSequence + 1 : cursor.slowSequence + 1;
+  let keyframeId = isFast ? cursor.fastKeyframeId : cursor.slowKeyframeId;
+  let frameType: NetFrameMeta['frameType'] = 'delta';
+  if (shouldKeyframe) {
+    keyframeId += 1;
+    frameType = 'keyframe';
+  }
+
+  if (isFast) {
+    cursor.fastSequence = sequence;
+    cursor.fastKeyframeId = keyframeId;
+    if (shouldKeyframe) {
+      cursor.lastFastKeyframeAt = now;
+    }
+  } else {
+    cursor.slowSequence = sequence;
+    cursor.slowKeyframeId = keyframeId;
+    if (shouldKeyframe) {
+      cursor.lastSlowKeyframeAt = now;
+    }
+  }
+
+  return {
+    protocolVersion: 2,
+    channel,
+    frameType,
+    sequence,
+    keyframeId,
+  };
+}
+
+function lobbySocketIds(lobbyId: string) {
+  const room = io.sockets.adapter.rooms.get(lobbyRoom(lobbyId));
+  if (!room) {
+    return [] as string[];
+  }
+  return Array.from(room.values());
 }
 
 function createLobbyRuntime(id: string, name: string, password: string | null) {
@@ -791,6 +1004,9 @@ function joinSocketToLobby(
   clearEmptyLobbyTimer(runtime);
   socket.join(lobbyRoom(runtime.id));
   socketLobbyMap.set(socket.id, runtime.id);
+  runInLobby(runtime, () => {
+    state.replicationCursors.set(socket.id, createReplicationCursor());
+  });
 
   runInLobby(runtime, () => {
     const key = sanitizeClientKey(options.clientKey);
@@ -856,6 +1072,7 @@ function leaveLobby(socketId: string, reason: string, preserveForReconnect: bool
   io.sockets.sockets.get(socketId)?.leave(lobbyRoom(runtime.id));
 
   runInLobby(runtime, () => {
+    state.replicationCursors.delete(socketId);
     const player = state.players.get(socketId);
     if (!player) {
       return;
@@ -1120,18 +1337,77 @@ function emitSnapshot(options?: { force?: boolean; includeMap?: boolean; targetS
   const includeMap = options?.includeMap ?? false;
   const targetSocketId = options?.targetSocketId;
   const now = Date.now();
-  const snapshotIntervalMs = snapshotIntervalMsForPhase(state.phase);
-  if (!force && now - state.lastSnapshotAt < snapshotIntervalMs) {
-    return;
-  }
-  state.lastSnapshotAt = now;
+  if (!NET_SPLIT_CHANNELS_ENABLED) {
+    const snapshotIntervalMs = snapshotIntervalMsForPhase(state.phase);
+    if (!force && now - state.lastSnapshotAt < snapshotIntervalMs) {
+      return;
+    }
+    state.lastSnapshotAt = now;
 
-  const snapshot = buildSnapshot(includeMap);
-  if (targetSocketId) {
-    emitToSocket(targetSocketId, 'snapshot', snapshot);
+    const snapshot = buildSnapshot(includeMap);
+    if (targetSocketId) {
+      emitToSocket(targetSocketId, 'snapshot', snapshot);
+      return;
+    }
+    emitToLobby(state.id, 'snapshot', snapshot);
     return;
   }
-  emitToLobby(state.id, 'snapshot', snapshot);
+
+  const fastIntervalMs = snapshotIntervalMsForPhase(state.phase);
+  const shouldEmitFast = force || (now - state.lastSnapshotAt >= fastIntervalMs);
+  const shouldEmitSlow = force || includeMap || (now - state.lastSlowSnapshotAt >= SNAPSHOT_INTERVAL_SLOW_MS);
+  if (!shouldEmitFast && !shouldEmitSlow) {
+    return;
+  }
+
+  const fastBase = shouldEmitFast ? buildStateFast() : null;
+  const slowBase = shouldEmitSlow ? buildStateSlow(includeMap) : null;
+
+  const recipients = targetSocketId ? [targetSocketId] : lobbySocketIds(state.id);
+  for (const recipientId of recipients) {
+    const cursor = getOrCreateReplicationCursor(recipientId);
+
+    if (fastBase) {
+      const fastMeta = nextFrameMeta(cursor, 'fast', now, force);
+      const fastCore = fastMeta.frameType === 'delta'
+        ? buildFastDelta(fastBase, cursor)
+        : fastBase;
+      if (fastMeta.frameType === 'keyframe') {
+        seedFastEntityCaches(fastBase, cursor);
+      }
+      const fastPayload: StateFastSnapshot = {
+        ...fastCore,
+        net: fastMeta,
+      };
+      cursor.lastFastPayloadBytes = estimatePayloadBytes(fastPayload);
+      emitToSocket(recipientId, 'stateFast', fastPayload);
+    }
+
+    if (slowBase) {
+      const slowPayload: StateSlowSnapshot = {
+        ...slowBase,
+        net: nextFrameMeta(cursor, 'slow', now, force || includeMap),
+      };
+      cursor.lastSlowPayloadBytes = estimatePayloadBytes(slowPayload);
+      emitToSocket(recipientId, 'stateSlow', slowPayload);
+    }
+  }
+
+  if (shouldEmitFast) {
+    state.lastSnapshotAt = now;
+  }
+
+  if (shouldEmitSlow) {
+    state.lastSlowSnapshotAt = now;
+  }
+
+  if (NET_LEGACY_SNAPSHOT_ENABLED) {
+    if (targetSocketId) {
+      emitToSocket(targetSocketId, 'snapshot', buildSnapshot(includeMap));
+    } else {
+      emitToLobby(state.id, 'snapshot', buildSnapshot(includeMap));
+    }
+  }
 }
 
 function broadcast(message: string) {
@@ -1140,28 +1416,48 @@ function broadcast(message: string) {
 }
 
 function buildSnapshot(includeMap = false): GameSnapshot {
+  return {
+    ...buildStateFast(),
+    ...buildStateSlow(includeMap),
+  };
+}
+
+function buildStateFast(): StateFastSnapshot {
+  const quantize = (value: number, decimals: number) => {
+    if (!SNAPSHOT_QUANTIZE_ENABLED || !Number.isFinite(value)) {
+      return value;
+    }
+    const factor = 10 ** decimals;
+    return Math.round(value * factor) / factor;
+  };
+
+  const quantizeToStep = (value: number, step: number) => {
+    if (!SNAPSHOT_QUANTIZE_ENABLED || !Number.isFinite(value) || step <= 0) {
+      return value;
+    }
+    return Math.round(value / step) * step;
+  };
+
   const countdownRemainingMs = state.phase === 'countdown' && state.countdownEndsAt
-    ? Math.max(0, state.countdownEndsAt - Date.now())
+    ? Math.max(0, quantizeToStep(state.countdownEndsAt - Date.now(), SNAPSHOT_TIMER_STEP_MS))
     : null;
   const displayScore = {
-    red: Math.round(state.score.red * 10) / 10,
-    blue: Math.round(state.score.blue * 10) / 10,
+    red: quantize(state.score.red, SNAPSHOT_SCORE_DECIMALS),
+    blue: quantize(state.score.blue, SNAPSHOT_SCORE_DECIMALS),
   };
   return {
     phase: state.phase,
     countdownRemainingMs,
     mode: state.mode,
-    modeSettings: state.modeSettings,
-    map: includeMap ? state.map : undefined,
     players: Array.from(state.players.values()).map((player) => ({
       id: player.id,
       name: player.name,
       isBot: player.isBot,
       team: player.team,
-      x: player.x,
-      y: player.y,
-      bodyAngle: player.bodyAngle,
-      turretAngle: player.turretAngle,
+      x: quantize(player.x, SNAPSHOT_POSITION_DECIMALS),
+      y: quantize(player.y, SNAPSHOT_POSITION_DECIMALS),
+      bodyAngle: quantize(player.bodyAngle, SNAPSHOT_ANGLE_DECIMALS),
+      turretAngle: quantize(player.turretAngle, SNAPSHOT_ANGLE_DECIMALS),
       health: player.health,
       maxHealth: player.maxHealth,
       score: player.score,
@@ -1175,16 +1471,26 @@ function buildSnapshot(includeMap = false): GameSnapshot {
     projectiles: Array.from(state.projectiles.values()).map((projectile) => ({
       id: projectile.id,
       ownerId: projectile.ownerId,
-      x: projectile.x,
-      y: projectile.y,
+      x: quantize(projectile.x, SNAPSHOT_POSITION_DECIMALS),
+      y: quantize(projectile.y, SNAPSHOT_POSITION_DECIMALS),
       team: projectile.team,
     })),
-    controlPoints: state.controlPoints.map((point) => ({ ...point })),
+    controlPoints: state.controlPoints.map((point) => ({
+      ...point,
+      progress: quantize(point.progress, SNAPSHOT_SCORE_DECIMALS),
+    })),
     flagsHome: { red: state.redFlag.carriedBy === null && near(state.redFlag.x, state.redFlag.homeX) && near(state.redFlag.y, state.redFlag.homeY), blue: state.blueFlag.carriedBy === null && near(state.blueFlag.x, state.blueFlag.homeX) && near(state.blueFlag.y, state.blueFlag.homeY) },
     kingHealth: { red: getTeamKingHealth('red'), blue: getTeamKingHealth('blue') },
     score: displayScore,
     activePlayers: Array.from(state.players.values()).filter((player) => !player.observer).length,
     connectedClients: Array.from(state.players.values()).filter((player) => !player.isBot).length,
+  };
+}
+
+function buildStateSlow(includeMap = false): StateSlowSnapshot {
+  return {
+    modeSettings: state.modeSettings,
+    map: includeMap ? state.map : undefined,
     adminId: state.adminId,
     message: state.message,
     roundResult: state.roundResult,

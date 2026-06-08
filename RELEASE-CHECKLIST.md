@@ -11,6 +11,10 @@ Use this checklist for every production promotion.
 - [ ] Mobile validation pass completed from `MOBILE-QA-CHECKLIST.md` (if mobile controls changed).
 - [ ] Trailer/media validation pass completed (if media changed).
 - [ ] No blocker/high-severity bugs open for this release.
+- [ ] WebSocket metrics review completed for this release window:
+	- [ ] Outbound WS KB/min reviewed versus baseline.
+	- [ ] Top outbound events by bytes reviewed.
+	- [ ] Peak-hour traffic checked for regressions.
 
 ## Release Notes
 

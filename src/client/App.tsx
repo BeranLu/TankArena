@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ArenaMap, ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, TeamId } from '../shared/types';
+import type { ArenaMap, ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, StateFastSnapshot, StateSlowSnapshot, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
@@ -102,6 +102,21 @@ type MobileControlMode = 'joystick' | 'buttons' | 'arena-sticks';
 type StickVisualState = { active: boolean; centerX: number; centerY: number; x: number; y: number };
 type ResolvedSnapshot = GameSnapshot & { map: ArenaMap };
 
+function mergeEntitiesById<T extends { id: string }>(
+  previous: T[],
+  changed: T[],
+  removed: string[] | undefined,
+) {
+  const byId = new Map(previous.map((entity) => [entity.id, entity]));
+  for (const entity of changed) {
+    byId.set(entity.id, entity);
+  }
+  for (const id of removed ?? []) {
+    byId.delete(id);
+  }
+  return Array.from(byId.values());
+}
+
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
   const existing = window.localStorage.getItem(storageKey)?.trim();
@@ -149,6 +164,8 @@ export default function App() {
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const snapshotRef = useRef<ResolvedSnapshot | null>(null);
+  const fastStateRef = useRef<StateFastSnapshot | null>(null);
+  const slowStateRef = useRef<StateSlowSnapshot | null>(null);
   const latestSnapshotForUiRef = useRef<ResolvedSnapshot | null>(null);
   const lastUiSnapshotPushAtRef = useRef(0);
   const uiSnapshotTimeoutRef = useRef<number | null>(null);
@@ -241,22 +258,28 @@ export default function App() {
       setIsAdmin(false);
       setCurrentLobby(null);
       snapshotRef.current = null;
+      fastStateRef.current = null;
+      slowStateRef.current = null;
       latestSnapshotForUiRef.current = null;
       setSnapshot(null);
       nextSocket.emit('listLobbies');
     };
 
-    nextSocket.on('snapshot', (nextSnapshot) => {
-      const resolvedMap = nextSnapshot.map ?? snapshotRef.current?.map ?? latestSnapshotForUiRef.current?.map;
-      if (!resolvedMap) {
+    const sendNetAck = () => {
+      const fastNet = fastStateRef.current?.net;
+      const slowNet = slowStateRef.current?.net;
+      if (!fastNet && !slowNet) {
         return;
       }
+      nextSocket.emit('netAck', {
+        fastSequence: fastNet?.sequence,
+        slowSequence: slowNet?.sequence,
+        fastKeyframeId: fastNet?.keyframeId,
+        slowKeyframeId: slowNet?.keyframeId,
+      });
+    };
 
-      const resolvedSnapshot: ResolvedSnapshot = {
-        ...nextSnapshot,
-        map: resolvedMap,
-      };
-
+    const commitSnapshotToUi = (resolvedSnapshot: ResolvedSnapshot) => {
       snapshotRef.current = resolvedSnapshot;
       latestSnapshotForUiRef.current = resolvedSnapshot;
 
@@ -280,6 +303,105 @@ export default function App() {
       }
 
       setIsAdmin(resolvedSnapshot.adminId === nextSocket.id);
+      sendNetAck();
+    };
+
+    const tryCommitMergedSnapshot = () => {
+      const fast = fastStateRef.current;
+      const slow = slowStateRef.current;
+      const resolvedMap = slow?.map ?? snapshotRef.current?.map ?? latestSnapshotForUiRef.current?.map;
+      if (!fast || !slow || !resolvedMap) {
+        return;
+      }
+
+      const resolvedSnapshot: ResolvedSnapshot = {
+        ...fast,
+        ...slow,
+        map: resolvedMap,
+      };
+      commitSnapshotToUi(resolvedSnapshot);
+    };
+
+    nextSocket.on('snapshot', (nextSnapshot) => {
+      const resolvedMap = nextSnapshot.map ?? snapshotRef.current?.map ?? latestSnapshotForUiRef.current?.map;
+      if (!resolvedMap) {
+        return;
+      }
+
+      const resolvedSnapshot: ResolvedSnapshot = {
+        ...nextSnapshot,
+        map: resolvedMap,
+      };
+
+      fastStateRef.current = {
+        phase: nextSnapshot.phase,
+        countdownRemainingMs: nextSnapshot.countdownRemainingMs,
+        mode: nextSnapshot.mode,
+        players: nextSnapshot.players,
+        projectiles: nextSnapshot.projectiles,
+        controlPoints: nextSnapshot.controlPoints,
+        flagsHome: nextSnapshot.flagsHome,
+        kingHealth: nextSnapshot.kingHealth,
+        score: nextSnapshot.score,
+        activePlayers: nextSnapshot.activePlayers,
+        connectedClients: nextSnapshot.connectedClients,
+      };
+      slowStateRef.current = {
+        modeSettings: nextSnapshot.modeSettings,
+        map: resolvedMap,
+        adminId: nextSnapshot.adminId,
+        message: nextSnapshot.message,
+        roundResult: nextSnapshot.roundResult,
+      };
+
+      commitSnapshotToUi(resolvedSnapshot);
+    });
+
+    nextSocket.on('stateFast', (nextFastSnapshot) => {
+      const isDelta = nextFastSnapshot.net?.frameType === 'delta';
+      if (!isDelta || !fastStateRef.current) {
+        fastStateRef.current = {
+          ...nextFastSnapshot,
+          playersRemoved: undefined,
+          projectilesRemoved: undefined,
+          controlPointsRemoved: undefined,
+        };
+      } else {
+        fastStateRef.current = {
+          ...nextFastSnapshot,
+          players: mergeEntitiesById(
+            fastStateRef.current.players,
+            nextFastSnapshot.players,
+            nextFastSnapshot.playersRemoved,
+          ),
+          projectiles: mergeEntitiesById(
+            fastStateRef.current.projectiles,
+            nextFastSnapshot.projectiles,
+            nextFastSnapshot.projectilesRemoved,
+          ),
+          controlPoints: mergeEntitiesById(
+            fastStateRef.current.controlPoints,
+            nextFastSnapshot.controlPoints,
+            nextFastSnapshot.controlPointsRemoved,
+          ),
+          playersRemoved: undefined,
+          projectilesRemoved: undefined,
+          controlPointsRemoved: undefined,
+        };
+      }
+      tryCommitMergedSnapshot();
+    });
+
+    nextSocket.on('stateSlow', (nextSlowSnapshot) => {
+      slowStateRef.current = {
+        ...slowStateRef.current,
+        ...nextSlowSnapshot,
+        map: nextSlowSnapshot.map
+          ?? slowStateRef.current?.map
+          ?? snapshotRef.current?.map
+          ?? latestSnapshotForUiRef.current?.map,
+      };
+      tryCommitMergedSnapshot();
     });
     nextSocket.on('lobbyList', (nextLobbies: LobbySummary[]) => {
       setLobbies(nextLobbies);

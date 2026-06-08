@@ -1,6 +1,6 @@
 # Tank Arena Bandwidth Scaling Migration Plan
 
-Purpose: evolve the current full-snapshot Socket.IO model into an interest-managed delta replication model that supports higher player counts with predictable bandwidth.
+Purpose: evolve the current full-snapshot Socket.IO model into a delta replication model that supports higher player counts with predictable bandwidth.
 
 ## Objectives
 
@@ -27,7 +27,6 @@ Purpose: evolve the current full-snapshot Socket.IO model into an interest-manag
 
 - Simulation tick remains authoritative (60Hz).
 - Networking tick is decoupled (10-20Hz).
-- Per-client relevance filtering (interest management) limits visible entities.
 - Protocol sends periodic keyframes plus compact deltas.
 - Client interpolates remote entities and reconciles local prediction.
 
@@ -44,7 +43,6 @@ Use a phased approach that keeps old and new protocols in parallel until validat
 - connected users over time
 - Add feature flags:
 - NET_PROTOCOL_V2_ENABLED
-- NET_INTEREST_ENABLED
 - NET_DELTA_ENABLED
 - NET_BINARY_ENABLED
 - Define rollback rule: disable flags and restart, no schema/data migration required.
@@ -64,20 +62,7 @@ Deliverable:
 Deliverable:
 - 15-25% traffic reduction with zero gameplay changes.
 
-### Phase 2 - Interest Management (5-8 days)
-
-- Introduce spatial index on server (uniform grid first, quadtree optional later).
-- For each client, compute relevance set per network tick:
-- nearby players
-- nearby projectiles
-- always-include objective-critical entities (flags, kings, capture points)
-- Send only relevant entities to each client.
-- Add observer profile with larger visibility radius.
-
-Deliverable:
-- Bandwidth scales with local density rather than total lobby size.
-
-### Phase 3 - Delta Replication (6-10 days)
+### Phase 2 - Delta Replication (6-10 days)
 
 - Add per-client replication cache (last acknowledged entity state/hash).
 - Send keyframes periodically (for example every 2-5 seconds).
@@ -91,7 +76,7 @@ Deliverable:
 Deliverable:
 - Significant drop in average bytes per update versus full relevant snapshot.
 
-### Phase 4 - Client Interpolation and Prediction Hardening (4-6 days)
+### Phase 3 - Client Interpolation and Prediction Hardening (4-6 days)
 
 - Maintain interpolation buffer for remote entities.
 - Predict local player movement client-side.
@@ -101,7 +86,7 @@ Deliverable:
 Deliverable:
 - Smooth visual motion at lower network update rates.
 
-### Phase 5 - Optional Binary Encoding (4-7 days)
+### Phase 4 - Optional Binary Encoding (4-7 days)
 
 - Keep JSON V2 as fallback protocol.
 - Add binary transport for V2 frames:
@@ -113,7 +98,7 @@ Deliverable:
 Deliverable:
 - Additional 20-50% payload reduction over compressed JSON deltas.
 
-### Phase 6 - Decommission Legacy Path (2-3 days)
+### Phase 5 - Decommission Legacy Path (2-3 days)
 
 - After two stable releases, disable legacy snapshot path.
 - Keep emergency legacy toggle for one more release window.
@@ -164,9 +149,6 @@ Promotion gate for each phase:
 - Risk: protocol complexity causes desync bugs.
 - Mitigation: periodic keyframes + sequence checks + forced resync path.
 
-- Risk: interest culling hides important entities.
-- Mitigation: explicit always-include objective set and generous safety radius.
-
 - Risk: prediction/reconciliation feels jittery.
 - Mitigation: interpolation buffer tuning and correction smoothing thresholds.
 
@@ -179,7 +161,7 @@ Promotion gate for each phase:
 - Week 2: Phase 2.
 - Week 3: Phase 3.
 - Week 4: Phase 4 and optional Phase 5 start.
-- Week 5: Phase 5 completion and Phase 6 prep.
+- Week 5: Phase 5 completion.
 
 ## Immediate Next Steps
 
