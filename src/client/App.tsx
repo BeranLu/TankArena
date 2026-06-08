@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, TeamId } from '../shared/types';
+import type { ArenaMap, ClientToServerEvents, GameMode, GameSnapshot, LobbySummary, ModeSettings, PlayerInput, PlayerSnapshot, ServerToClientEvents, TeamId } from '../shared/types';
 
 const MODES: Record<GameMode, string> = {
   deathmatch: 'Team Deathmatch',
@@ -96,9 +96,11 @@ const JOYSTICK_DEADZONE = 0.25;
 const AIM_JOYSTICK_MAX_OFFSET = 38;
 const AIM_JOYSTICK_DEADZONE = 0.18;
 const AIM_DISTANCE = 220;
+const INPUT_SEND_INTERVAL_MS = 33;
 
 type MobileControlMode = 'joystick' | 'buttons' | 'arena-sticks';
 type StickVisualState = { active: boolean; centerX: number; centerY: number; x: number; y: number };
+type ResolvedSnapshot = GameSnapshot & { map: ArenaMap };
 
 function getOrCreateClientKey() {
   const storageKey = 'tankarena-client-key';
@@ -113,7 +115,7 @@ function getOrCreateClientKey() {
 
 export default function App() {
   const [socket, setSocket] = useState<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
-  const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<ResolvedSnapshot | null>(null);
   const [name, setName] = useState('Tank Pilot');
   const [joined, setJoined] = useState(false);
   const [lobbies, setLobbies] = useState<LobbySummary[]>([]);
@@ -146,10 +148,12 @@ export default function App() {
   const [mobileControlMode, setMobileControlMode] = useState<MobileControlMode>('joystick');
   const clientKeyRef = useRef(getOrCreateClientKey());
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
-  const snapshotRef = useRef<GameSnapshot | null>(null);
-  const latestSnapshotForUiRef = useRef<GameSnapshot | null>(null);
+  const snapshotRef = useRef<ResolvedSnapshot | null>(null);
+  const latestSnapshotForUiRef = useRef<ResolvedSnapshot | null>(null);
   const lastUiSnapshotPushAtRef = useRef(0);
   const uiSnapshotTimeoutRef = useRef<number | null>(null);
+  const lastInputPushAtRef = useRef(0);
+  const inputPushTimeoutRef = useRef<number | null>(null);
   const joinedRef = useRef(false);
   const observerRef = useRef(false);
   const inputRef = useRef<PlayerInput>({ ...DEFAULT_INPUT });
@@ -243,10 +247,20 @@ export default function App() {
     };
 
     nextSocket.on('snapshot', (nextSnapshot) => {
-      snapshotRef.current = nextSnapshot;
-      latestSnapshotForUiRef.current = nextSnapshot;
+      const resolvedMap = nextSnapshot.map ?? snapshotRef.current?.map ?? latestSnapshotForUiRef.current?.map;
+      if (!resolvedMap) {
+        return;
+      }
 
-      const localPlayer = nextSnapshot.players.find((player: PlayerSnapshot) => player.id === nextSocket.id);
+      const resolvedSnapshot: ResolvedSnapshot = {
+        ...nextSnapshot,
+        map: resolvedMap,
+      };
+
+      snapshotRef.current = resolvedSnapshot;
+      latestSnapshotForUiRef.current = resolvedSnapshot;
+
+      const localPlayer = resolvedSnapshot.players.find((player: PlayerSnapshot) => player.id === nextSocket.id);
       if (localPlayer) {
         setObserver(localPlayer.observer);
       }
@@ -255,7 +269,7 @@ export default function App() {
       const elapsed = now - lastUiSnapshotPushAtRef.current;
       if (elapsed >= UI_SNAPSHOT_INTERVAL_MS) {
         lastUiSnapshotPushAtRef.current = now;
-        setSnapshot(nextSnapshot);
+        setSnapshot(resolvedSnapshot);
       } else if (uiSnapshotTimeoutRef.current === null) {
         const wait = UI_SNAPSHOT_INTERVAL_MS - elapsed;
         uiSnapshotTimeoutRef.current = window.setTimeout(() => {
@@ -265,7 +279,7 @@ export default function App() {
         }, wait);
       }
 
-      setIsAdmin(nextSnapshot.adminId === nextSocket.id);
+      setIsAdmin(resolvedSnapshot.adminId === nextSocket.id);
     });
     nextSocket.on('lobbyList', (nextLobbies: LobbySummary[]) => {
       setLobbies(nextLobbies);
@@ -292,6 +306,10 @@ export default function App() {
       if (uiSnapshotTimeoutRef.current !== null) {
         window.clearTimeout(uiSnapshotTimeoutRef.current);
         uiSnapshotTimeoutRef.current = null;
+      }
+      if (inputPushTimeoutRef.current !== null) {
+        window.clearTimeout(inputPushTimeoutRef.current);
+        inputPushTimeoutRef.current = null;
       }
       nextSocket.close();
     };
@@ -480,6 +498,8 @@ export default function App() {
     setObserver(false);
     setIsAdmin(false);
     setCurrentLobby(null);
+    snapshotRef.current = null;
+    latestSnapshotForUiRef.current = null;
     setSnapshot(null);
     socket?.emit('listLobbies');
   };
@@ -516,7 +536,33 @@ export default function App() {
     if (!socketRef.current || !joinedRef.current || observerRef.current) {
       return;
     }
-    socketRef.current.emit('input', { ...inputRef.current });
+    const emitNow = () => {
+      if (!socketRef.current || !joinedRef.current || observerRef.current) {
+        return;
+      }
+      lastInputPushAtRef.current = Date.now();
+      socketRef.current?.emit('input', { ...inputRef.current });
+    };
+
+    const now = Date.now();
+    const elapsed = now - lastInputPushAtRef.current;
+    if (elapsed >= INPUT_SEND_INTERVAL_MS) {
+      if (inputPushTimeoutRef.current !== null) {
+        window.clearTimeout(inputPushTimeoutRef.current);
+        inputPushTimeoutRef.current = null;
+      }
+      emitNow();
+      return;
+    }
+
+    if (inputPushTimeoutRef.current !== null) {
+      return;
+    }
+
+    inputPushTimeoutRef.current = window.setTimeout(() => {
+      inputPushTimeoutRef.current = null;
+      emitNow();
+    }, INPUT_SEND_INTERVAL_MS - elapsed);
   }
 
   function setInputFlag(key: keyof Pick<PlayerInput, 'up' | 'down' | 'left' | 'right' | 'fire'>, value: boolean) {
@@ -1601,7 +1647,7 @@ export default function App() {
   );
 }
 
-function draw(context: CanvasRenderingContext2D, snapshot: GameSnapshot) {
+function draw(context: CanvasRenderingContext2D, snapshot: ResolvedSnapshot) {
   const width = context.canvas.clientWidth;
   const height = context.canvas.clientHeight;
   const viewport = getMapViewport(snapshot.map.width, snapshot.map.height, width, height);

@@ -74,6 +74,7 @@ type LobbyState = {
   nextBotId: number;
   message: string;
   roundResult: RoundResult | null;
+  lastSnapshotAt: number;
 };
 type LobbyRuntime = {
   id: string;
@@ -85,6 +86,8 @@ type LobbyRuntime = {
 
 const PORT = Number(process.env.PORT ?? 3001);
 const TICK_MS = 1000 / 60;
+const SNAPSHOT_RATE_HZ = Math.max(1, Math.min(60, parseLimit(process.env.SNAPSHOT_RATE_HZ, 20)));
+const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_RATE_HZ;
 const PLAYER_RADIUS = 14;
 const BULLET_RADIUS = 4;
 const BASE_HEALTH = 100;
@@ -453,7 +456,7 @@ io.on('connection', (socket) => {
       state.map = map;
       state.controlPoints = createControlPointsForMap(map);
       resetWorld(true);
-      emitSnapshot();
+      emitSnapshot({ force: true, includeMap: true });
       emitLobbyList();
     });
   });
@@ -609,6 +612,7 @@ function createLobbyState(id: string, name: string, password: string | null): Lo
     nextBotId: 1,
     message: 'Waiting for players to join the lobby.',
     roundResult: null,
+    lastSnapshotAt: 0,
   };
 }
 
@@ -733,8 +737,9 @@ function joinSocketToLobby(
     refreshAdminFlags();
 
     socket.emit('joined', { observer, admin: player.id === state.adminId, team, lobbyId: runtime.id, lobbyName: runtime.name });
+    emitSnapshot({ force: true, includeMap: true, targetSocketId: socket.id });
     broadcast(`${player.name} joined ${observer ? 'as an observer' : 'the lobby'}.`);
-    emitSnapshot();
+    emitSnapshot({ force: true });
   });
 }
 
@@ -1006,8 +1011,22 @@ function resetWorld(resetPlayers = false) {
   }
 }
 
-function emitSnapshot() {
-  io.to(lobbyRoom(state.id)).emit('snapshot', buildSnapshot());
+function emitSnapshot(options?: { force?: boolean; includeMap?: boolean; targetSocketId?: string }) {
+  const force = options?.force ?? false;
+  const includeMap = options?.includeMap ?? false;
+  const targetSocketId = options?.targetSocketId;
+  const now = Date.now();
+  if (!force && now - state.lastSnapshotAt < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+  state.lastSnapshotAt = now;
+
+  const snapshot = buildSnapshot(includeMap);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit('snapshot', snapshot);
+    return;
+  }
+  io.to(lobbyRoom(state.id)).emit('snapshot', snapshot);
 }
 
 function broadcast(message: string) {
@@ -1015,7 +1034,7 @@ function broadcast(message: string) {
   io.to(lobbyRoom(state.id)).emit('message', message);
 }
 
-function buildSnapshot(): GameSnapshot {
+function buildSnapshot(includeMap = false): GameSnapshot {
   const countdownRemainingMs = state.phase === 'countdown' && state.countdownEndsAt
     ? Math.max(0, state.countdownEndsAt - Date.now())
     : null;
@@ -1028,7 +1047,7 @@ function buildSnapshot(): GameSnapshot {
     countdownRemainingMs,
     mode: state.mode,
     modeSettings: state.modeSettings,
-    map: state.map,
+    map: includeMap ? state.map : undefined,
     players: Array.from(state.players.values()).map((player) => ({
       id: player.id,
       name: player.name,

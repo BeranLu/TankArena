@@ -100,7 +100,7 @@ export interface GameSnapshot {
   countdownRemainingMs: number | null;
   mode: GameMode;
   modeSettings: ModeSettings;
-  map: ArenaMap;
+  map?: ArenaMap;
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
   controlPoints: ControlPointSnapshot[];
