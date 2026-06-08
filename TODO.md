@@ -107,6 +107,61 @@ Coverage exit criteria:
 - Client feature toggles driven by env vars are covered by browser tests.
 - One mobile smoke path is automated and green in CI or release validation.
 
+## Bandwidth Optimization Plan (WebSocket Focus)
+
+Goal: reduce outbound WebSocket traffic while preserving gameplay feel in active matches.
+
+- [ ] (S) Use [BANDWIDTH-MIGRATION-PLAN.md](BANDWIDTH-MIGRATION-PLAN.md) as the implementation source of truth and assign an owner per phase.
+
+### Phase 0 - Live Monitoring Baseline (Immediate)
+
+- [x] (S) Add per-event outbound WS metrics logs (bytes and event counts).
+- [ ] (S) Record 24h baseline after deploy:
+  - [ ] Capture total outbound WS KB per minute.
+  - [ ] Capture top events by bytes (`snapshot`, `message`, `lobbyList`, `joined`).
+  - [ ] Compare peak hour vs off-peak hour traffic.
+
+### Phase 1 - Low-Risk Traffic Cuts (Immediate to Week 1)
+
+- [x] (S) Throttle snapshot broadcast rate below simulation tick.
+- [x] (S) Stop resending static map payload in every snapshot.
+- [x] (S) Enable WebSocket compression.
+- [x] (S) Keep full-rate snapshots for playable phases (`running`, `lobby`) and throttle only non-play phases.
+- [ ] (S) Tune default env rates after baseline review:
+  - [ ] `SNAPSHOT_RATE_RUNNING_HZ`
+  - [ ] `SNAPSHOT_RATE_IDLE_HZ`
+  - [ ] `WS_METRICS_LOG_INTERVAL_MS`
+
+### Phase 2 - Payload Size Reduction (Week 1 to Week 2)
+
+- [ ] (M) Quantize high-frequency numeric fields in snapshots:
+  - [ ] position/angle precision clamp.
+  - [ ] score/timer precision clamp.
+- [ ] (M) Split snapshot schema into fast lane and slow lane events:
+  - [ ] Fast lane: player/projectile transforms and health.
+  - [ ] Slow lane: settings/admin metadata/round summaries.
+- [ ] (S) Add payload-size debug output for `snapshot` shape revisions.
+
+### Phase 3 - Structural Wins (Week 2 to Week 3)
+
+- [ ] (L) Delta snapshots per client:
+  - [ ] Track last acknowledged state per socket.
+  - [ ] Send changed entities only.
+  - [ ] Add periodic full snapshot resync safety.
+- [ ] (L) Interest management (relevance culling):
+  - [ ] Nearby entity filtering for players.
+  - [ ] Wider observer radius fallback.
+  - [ ] Keep objective-critical entities always included.
+
+### Validation and Exit Criteria
+
+- [ ] (S) Add a release checkpoint requiring WS metrics review before production promote.
+- [ ] (S) Confirm no visible gameplay degradation (movement smoothness/shooting responsiveness) on desktop and mobile.
+- [ ] (S) Target measurable reductions:
+  - [ ] At least 40% reduction in average outbound WS bytes/min from baseline.
+  - [ ] At least 50% reduction in idle-phase outbound WS bytes/min from baseline.
+  - [ ] No increase in reconnect/jitter player reports during peak hour.
+
 ## Parking Lot (Nice to Have)
 
 - [ ] (M) Observer minimap or tactical overlay.
