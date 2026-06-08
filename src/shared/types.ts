@@ -132,6 +132,11 @@ export interface NetAckPayload {
   slowKeyframeId?: number;
 }
 
+export interface NetResyncRequestPayload {
+  channels?: NetChannel[];
+  reason?: string;
+}
+
 export interface StateFastSnapshot {
   net?: NetFrameMeta;
   phase: MatchPhase;
@@ -188,6 +193,7 @@ export interface ClientToServerEvents {
   resetLobby: () => void;
   input: (input: PlayerInput) => void;
   netAck: (payload: NetAckPayload) => void;
+  requestKeyframe: (payload: NetResyncRequestPayload) => void;
 }
 
 export interface ServerToClientEvents {

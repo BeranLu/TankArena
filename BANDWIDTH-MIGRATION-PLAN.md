@@ -168,3 +168,17 @@ Promotion gate for each phase:
 - Add this plan into sprint board with owners per phase.
 - Implement protocol capability handshake scaffold.
 - Start Phase 0 baseline capture and lock target thresholds.
+
+## Next 3 Execution Tasks
+
+1. Sequence-gap recovery path (Done)
+- Detect split-channel sequence gaps on client and request targeted keyframe resync.
+- Force targeted keyframe emit on server for requesting socket.
+
+2. Baseline evidence pack (Next)
+- Capture 24h WS baseline report with bytes/min, avg payload, p95 payload, top events by bytes.
+- Publish thresholds for production promote gate.
+
+3. Interpolation smoothing pass (Next)
+- Add remote-entity interpolation buffer and correction smoothing thresholds.
+- Validate with mobile and desktop responsiveness checks.

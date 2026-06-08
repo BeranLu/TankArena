@@ -97,6 +97,7 @@ const AIM_JOYSTICK_MAX_OFFSET = 38;
 const AIM_JOYSTICK_DEADZONE = 0.18;
 const AIM_DISTANCE = 220;
 const INPUT_SEND_INTERVAL_MS = 33;
+const RESYNC_REQUEST_COOLDOWN_MS = 1000;
 
 type MobileControlMode = 'joystick' | 'buttons' | 'arena-sticks';
 type StickVisualState = { active: boolean; centerX: number; centerY: number; x: number; y: number };
@@ -166,6 +167,9 @@ export default function App() {
   const snapshotRef = useRef<ResolvedSnapshot | null>(null);
   const fastStateRef = useRef<StateFastSnapshot | null>(null);
   const slowStateRef = useRef<StateSlowSnapshot | null>(null);
+  const lastFastSequenceRef = useRef(0);
+  const lastSlowSequenceRef = useRef(0);
+  const lastResyncRequestAtRef = useRef(0);
   const latestSnapshotForUiRef = useRef<ResolvedSnapshot | null>(null);
   const lastUiSnapshotPushAtRef = useRef(0);
   const uiSnapshotTimeoutRef = useRef<number | null>(null);
@@ -260,9 +264,39 @@ export default function App() {
       snapshotRef.current = null;
       fastStateRef.current = null;
       slowStateRef.current = null;
+      lastFastSequenceRef.current = 0;
+      lastSlowSequenceRef.current = 0;
       latestSnapshotForUiRef.current = null;
       setSnapshot(null);
       nextSocket.emit('listLobbies');
+    };
+
+    const shouldApplyFrame = (channel: 'fast' | 'slow', sequence?: number, frameType?: 'keyframe' | 'delta') => {
+      if (!Number.isFinite(sequence)) {
+        return true;
+      }
+      const nextSequence = Math.floor(sequence as number);
+      const lastSequence = channel === 'fast' ? lastFastSequenceRef.current : lastSlowSequenceRef.current;
+
+      if (nextSequence <= lastSequence) {
+        return false;
+      }
+
+      if (frameType === 'delta' && lastSequence > 0 && nextSequence > lastSequence + 1) {
+        const now = Date.now();
+        if (now - lastResyncRequestAtRef.current >= RESYNC_REQUEST_COOLDOWN_MS) {
+          lastResyncRequestAtRef.current = now;
+          nextSocket.emit('requestKeyframe', { channels: [channel], reason: `gap:${channel}:${lastSequence}->${nextSequence}` });
+        }
+        return false;
+      }
+
+      if (channel === 'fast') {
+        lastFastSequenceRef.current = nextSequence;
+      } else {
+        lastSlowSequenceRef.current = nextSequence;
+      }
+      return true;
     };
 
     const sendNetAck = () => {
@@ -358,6 +392,9 @@ export default function App() {
     });
 
     nextSocket.on('stateFast', (nextFastSnapshot) => {
+      if (!shouldApplyFrame('fast', nextFastSnapshot.net?.sequence, nextFastSnapshot.net?.frameType)) {
+        return;
+      }
       const isDelta = nextFastSnapshot.net?.frameType === 'delta';
       if (!isDelta || !fastStateRef.current) {
         fastStateRef.current = {
@@ -393,6 +430,9 @@ export default function App() {
     });
 
     nextSocket.on('stateSlow', (nextSlowSnapshot) => {
+      if (!shouldApplyFrame('slow', nextSlowSnapshot.net?.sequence, nextSlowSnapshot.net?.frameType)) {
+        return;
+      }
       slowStateRef.current = {
         ...slowStateRef.current,
         ...nextSlowSnapshot,

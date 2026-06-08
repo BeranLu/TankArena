@@ -21,6 +21,7 @@ import type {
   NetAckPayload,
   NetChannel,
   NetFrameMeta,
+  NetResyncRequestPayload,
   PlayerInput,
   PlayerSnapshot,
   ProjectileSnapshot,
@@ -745,6 +746,16 @@ io.on('connection', (socket) => {
       if (Number.isFinite(payload.slowSequence)) {
         cursor.lastAckedSlowSequence = Math.max(cursor.lastAckedSlowSequence, Math.floor(payload.slowSequence as number));
       }
+    });
+  });
+
+  socket.on('requestKeyframe', (_payload: NetResyncRequestPayload) => {
+    const runtime = getSocketLobby(socket.id);
+    if (!runtime) {
+      return;
+    }
+    runInLobby(runtime, () => {
+      emitSnapshot({ force: true, includeMap: true, targetSocketId: socket.id });
     });
   });
 
